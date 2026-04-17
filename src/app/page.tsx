@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { createClient } from "@/utils/supabase/client"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -24,9 +25,21 @@ export default function LoginPage() {
     }
 
     setLoading(true)
-    // Simulate auth delay
-    await new Promise((r) => setTimeout(r, 800))
-    setLoading(false)
+    const supabase = createClient()
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: username,
+      password,
+    })
+    
+    if (signInError) {
+      setLoading(false)
+      setError("Username atau password salah")
+      return
+    }
+
+    // Explicitly refresh so that layout can pick up new session if needed
+    // The middleware will allow access to /dashboard now
+    router.refresh()
     router.push("/dashboard")
   }
 
