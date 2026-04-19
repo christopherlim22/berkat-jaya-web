@@ -12,7 +12,7 @@ const navItems = [
   { icon: "📝", label: "Piutang", href: "/dashboard/piutang" },
   { icon: "🐔", label: "Stok Ayam", href: "/dashboard/stok-ayam" },
   { icon: "🚚", label: "Pengiriman", href: "/dashboard/pengiriman" },
-  { icon: "👥", label: "Master Pelanggan", href: "/dashboard/pelanggan" },
+  { icon: "🗄️", label: "Master Data", href: "/dashboard/master-data" },
   { icon: "📊", label: "Laporan", href: "/dashboard/laporan" },
   { icon: "⚙️", label: "Pengaturan", href: "/dashboard/pengaturan" },
 ]
