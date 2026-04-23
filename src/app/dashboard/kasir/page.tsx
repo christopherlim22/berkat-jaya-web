@@ -33,7 +33,6 @@ export default function KasirPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
   const [namaPembeli, setNamaPembeli] = useState("")
-  const [pembayaran, setPembayaran] = useState("Tunai")
   const [isLoading, setIsLoading] = useState(false)
 
   const [customers, setCustomers] = useState<string[]>([])
@@ -77,12 +76,24 @@ export default function KasirPage() {
     }
     fetchPiutangAlerts()
 
+    const fetchNoNota = async () => {
+      const { data } = await supabase.from('transaksi').select('no_nota').order('created_at', { ascending: false }).limit(1).single()
+      if (data && data.no_nota) {
+        let lastNum = 0
+        if (data.no_nota.startsWith('BJ-')) {
+          const parts = data.no_nota.split('-')
+          lastNum = parseInt(parts[parts.length - 1], 10)
+        } else {
+          lastNum = parseInt(data.no_nota, 10)
+        }
+        setNoNota(isNaN(lastNum) ? "1" : String(lastNum + 1))
+      } else {
+        setNoNota("1")
+      }
+    }
+    fetchNoNota()
+
     const today = new Date()
-    const yyyy = today.getFullYear()
-    const mm = String(today.getMonth() + 1).padStart(2, "0")
-    const dd = String(today.getDate()).padStart(2, "0")
-    const randSequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")
-    setNoNota(`BJ-${yyyy}${mm}${dd}-${randSequence}`)
     const tzOffset = today.getTimezoneOffset() * 60000
     const localISOTime = (new Date(today.getTime() - tzOffset)).toISOString().split('T')[0]
     setTanggal(localISOTime)
@@ -175,7 +186,8 @@ export default function KasirPage() {
           no_nota: noNota,
           tanggal: dbTanggal,
           nama_pembeli: namaPembeli,
-          jenis_pembayaran: pembayaran,
+          jenis_pembayaran: null,
+          tipe_pengiriman: 'dikirim',
           total: grandTotal
         })
         .select()
@@ -201,36 +213,44 @@ export default function KasirPage() {
 
       if (detailError) throw detailError
 
-      // 3. Save to piutang if needed
-      if (pembayaran === 'Piutang') {
-        const { error: piutangError } = await supabase
-          .from('piutang')
-          .insert({
-            no_nota: noNota,
-            tanggal: dbTanggal,
-            nama_pembeli: namaPembeli,
-            total: grandTotal,
-            sisa: grandTotal,
-            status: 'belum lunas'
-          })
+      // 3. Save to pengiriman
+      const { error: pengirimanError } = await supabase
+        .from('pengiriman')
+        .insert({
+          transaksi_id,
+          status: 'belum_kirim'
+        })
 
-        if (piutangError) throw piutangError
-      }
+      if (pengirimanError) throw pengirimanError
 
       alert(`Transaksi Berhasil Disimpan!\n\nNo Nota: ${noNota}`)
 
       // Reset form
       setCart([])
       setNamaPembeli("")
-      setPembayaran("Tunai")
 
       // Regenerate No Nota correctly
-      const randSequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")
-      const today = new Date()
-      const yyyy = today.getFullYear()
-      const mm = String(today.getMonth() + 1).padStart(2, "0")
-      const dd = String(today.getDate()).padStart(2, "0")
-      setNoNota(`BJ-${yyyy}${mm}${dd}-${randSequence}`)
+      const numNoNota = parseInt(noNota, 10)
+      if (isNaN(numNoNota)) {
+        const fetchNoNota = async () => {
+          const { data } = await supabase.from('transaksi').select('no_nota').order('created_at', { ascending: false }).limit(1).single()
+          if (data && data.no_nota) {
+            let lastNum = 0
+            if (data.no_nota.startsWith('BJ-')) {
+              const parts = data.no_nota.split('-')
+              lastNum = parseInt(parts[parts.length - 1], 10)
+            } else {
+              lastNum = parseInt(data.no_nota, 10)
+            }
+            setNoNota(isNaN(lastNum) ? "1" : String(lastNum + 1))
+          } else {
+            setNoNota("1")
+          }
+        }
+        fetchNoNota()
+      } else {
+        setNoNota(String(numNoNota + 1))
+      }
     } catch (error: any) {
       console.error("Error saving transaction:", error)
       alert(`Gagal menyimpan transaksi: ${error.message}`)
@@ -243,7 +263,6 @@ export default function KasirPage() {
     if (confirm("Apakah Anda yakin ingin membatalkan transaksi ini?")) {
       setCart([])
       setNamaPembeli("")
-      setPembayaran("Tunai")
     }
   }
 
@@ -320,11 +339,11 @@ export default function KasirPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label className="text-gray-400 text-sm">No. Nota</Label>
-                  <p className="text-white font-mono bg-[#0d1117] border border-white/5 px-3 py-2.5 rounded-lg text-sm">{noNota || "Memuat..."}</p>
+                  <input type="text" value={noNota} onChange={e => setNoNota(e.target.value)} className="bg-[#0d1117] border border-white/10 text-white font-mono rounded-lg px-3 py-2.5 text-sm w-full focus:outline-none focus:border-green-500" />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-gray-400 text-sm">Tanggal</Label>
-                  <input type="date" value={tanggal} onChange={e => setTanggal(e.target.value)} onClick={e => (e.target as any).showPicker?.()}
+                  <input type="date" value={tanggal} onChange={e => setTanggal(e.target.value)} onClick={(e) => (e.target as HTMLInputElement).showPicker?.()}
                     className="w-full cursor-pointer bg-[#0d1117] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
                 </div>
               </div>
@@ -374,19 +393,6 @@ export default function KasirPage() {
                   </span>
                 </div>
               )}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-gray-300 text-base">Jenis Pembayaran</Label>
-              <select
-                value={pembayaran}
-                onChange={(e) => setPembayaran(e.target.value)}
-                className="w-full flex h-12 rounded-md border border-white/10 bg-[#0d1117] px-3 py-2 text-base text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d1117]"
-              >
-                <option value="Tunai">💵 Tunai (Cash)</option>
-                <option value="Transfer">💳 Transfer Bank / QRIS</option>
-                <option value="Piutang">📝 Piutang (Kredit)</option>
-              </select>
             </div>
 
             <hr className="border-white/[0.05] my-2" />

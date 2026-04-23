@@ -13,6 +13,7 @@ type Piutang = {
   status: string
   terbayar?: number | null
   tanggal_lunas?: string | null
+  metode_bayar?: string | null
 }
 
 export default function PiutangPage() {
@@ -28,6 +29,7 @@ export default function PiutangPage() {
   const [selectedTx, setSelectedTx] = useState<Piutang | null>(null)
   const [amountPaid, setAmountPaid] = useState<string>("")
   const [paymentDate, setPaymentDate] = useState<string>("")
+  const [metodeBayar, setMetodeBayar] = useState<'Tunai' | 'Transfer'>('Tunai')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -117,6 +119,7 @@ export default function PiutangPage() {
   const openPaymentModal = (tx: Piutang) => {
     setSelectedTx(tx)
     setAmountPaid(tx.sisa.toString())
+    setMetodeBayar('Tunai')
     const tzOffset = (new Date()).getTimezoneOffset() * 60000
     const localISOTime = (new Date(Date.now() - tzOffset)).toISOString().split('T')[0]
     setPaymentDate(localISOTime)
@@ -137,7 +140,7 @@ export default function PiutangPage() {
 
       const { data, error } = await supabase
         .from('piutang')
-        .update({ terbayar: newTerbayar, sisa: newSisa, status: newStatus, tanggal_lunas: newTanggalLunas })
+        .update({ terbayar: newTerbayar, sisa: newSisa, status: newStatus, tanggal_lunas: newTanggalLunas, metode_bayar: metodeBayar })
         .eq('id', selectedTx.id)
         .select()
         .single()
@@ -359,6 +362,7 @@ export default function PiutangPage() {
                     <th className="px-6 py-4 font-medium">Pembeli</th>
                     <th className="px-6 py-4 font-medium text-right">Total Transaksi</th>
                     <th className="px-6 py-4 font-medium text-right">Terbayar</th>
+                    <th className="px-6 py-4 font-medium text-center">Metode Bayar</th>
                     <th className="px-6 py-4 font-medium text-right">Sisa Hutang</th>
                     <th className="px-6 py-4 font-medium text-center">Status</th>
                     <th className="px-6 py-4 font-medium text-center">Aksi</th>
@@ -374,6 +378,19 @@ export default function PiutangPage() {
                         <td className="px-6 py-4 font-medium text-white text-base">{tx.nama_pembeli}</td>
                         <td className="px-6 py-4 text-right text-white">{formatRp(tx.total)}</td>
                         <td className="px-6 py-4 text-right text-gray-400">{formatRp(tx.terbayar || 0)}</td>
+                        <td className="px-6 py-4 text-center">
+                          {isLunas && tx.metode_bayar ? (
+                            <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wide border ${
+                              tx.metode_bayar === 'Transfer'
+                                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                : 'bg-green-500/10 text-green-400 border-green-500/20'
+                            }`}>
+                              {tx.metode_bayar === 'Transfer' ? '🏦 Transfer' : '💵 Tunai'}
+                            </span>
+                          ) : (
+                            <span className="text-gray-500">-</span>
+                          )}
+                        </td>
                         <td className={`px-6 py-4 text-right font-bold ${isLunas ? 'text-gray-500' : 'text-red-400'}`}>{formatRp(tx.sisa)}</td>
                         <td className="px-6 py-4 text-center">
                           <span className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${isLunas ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
@@ -398,7 +415,7 @@ export default function PiutangPage() {
                 {searchQuery && filteredData.length > 0 && (
                   <tfoot className="border-t border-white/10 bg-[#0d1117]">
                     <tr>
-                      <td colSpan={5} className="px-6 py-5 text-right font-medium text-gray-400">
+                      <td colSpan={6} className="px-6 py-5 text-right font-medium text-gray-400">
                         Total sisa hutang untuk "{searchQuery}":
                       </td>
                       <td className="px-6 py-5 text-right font-bold text-orange-400 text-base">{formatRp(searchSisaTotal)}</td>
@@ -475,6 +492,28 @@ export default function PiutangPage() {
                   <p className={`text-sm font-bold ${selectedTx.sisa - (parseFloat(amountPaid) || 0) <= 0 ? 'text-green-400' : 'text-orange-400'}`}>
                     {formatRp(Math.max(0, selectedTx.sisa - (parseFloat(amountPaid) || 0)))}
                   </p>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-gray-300 text-sm font-medium">Metode Pembayaran</label>
+                <div className="flex gap-2">
+                  {['Tunai', 'Transfer'].map(m => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMetodeBayar(m as 'Tunai' | 'Transfer')}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition-colors ${
+                        metodeBayar === m
+                          ? m === 'Tunai'
+                            ? 'bg-green-600 border-green-500 text-white'
+                            : 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
+                      }`}
+                    >
+                      {m === 'Tunai' ? '💵 Tunai' : '🏦 Transfer'}
+                    </button>
+                  ))}
                 </div>
               </div>
 

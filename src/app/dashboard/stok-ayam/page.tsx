@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { getUserRole } from "@/utils/supabase/getUserRole"
 
 type Produk = { id: number; nama: string; satuan: string; aktif: boolean }
 type Supplier = { id: number; nama: string }
@@ -57,11 +58,20 @@ export default function StokAyamPage() {
   const [detailProduk, setDetailProduk] = useState<StokItem | null>(null)
   const [detailData, setDetailData] = useState<DetailData | null>(null)
   const [isDetailLoading, setIsDetailLoading] = useState(false)
+  const [role, setRole] = useState<'admin' | 'kasir' | null>(null)
 
   const formatRp = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n)
   const formatDate = (d: string) => new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => { 
+    fetchAll() 
+    getUserRole().then(r => {
+      setRole(r)
+      if (r === 'kasir') {
+        setActiveTab('stok')
+      }
+    })
+  }, [])
 
   const fetchAll = async () => {
     setIsLoading(true)
@@ -263,7 +273,9 @@ export default function StokAyamPage() {
           <p className="text-sm text-gray-500 mt-0.5">Pantau stok, input pembelian, dan lakukan opname</p>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => setShowStokAwalModal(true)} className="bg-white/5 hover:bg-white/10 text-white text-sm font-medium px-4 py-2.5 rounded-xl border border-white/10 transition-colors">⚙️ Set Stok Awal</button>
+          {role === 'admin' && (
+            <button onClick={() => setShowStokAwalModal(true)} className="bg-white/5 hover:bg-white/10 text-white text-sm font-medium px-4 py-2.5 rounded-xl border border-white/10 transition-colors">⚙️ Set Stok Awal</button>
+          )}
           <button onClick={fetchAll} className="bg-white/5 hover:bg-white/10 text-white text-sm font-medium px-4 py-2.5 rounded-xl border border-white/10 transition-colors">🔄 Refresh</button>
         </div>
       </header>
@@ -294,7 +306,9 @@ export default function StokAyamPage() {
         </div>
 
         <div className="flex gap-2 border-b border-white/[0.05]">
-          {[{ key: 'stok', label: '📦 Stok Saat Ini' }, { key: 'hpp', label: '🛒 Input HPP' }, { key: 'opname', label: '📋 Opname' }].map(tab => (
+          {[{ key: 'stok', label: '📦 Stok Saat Ini' }, { key: 'hpp', label: '🛒 Input HPP' }, { key: 'opname', label: '📋 Opname' }]
+            .filter(tab => role === 'kasir' ? tab.key === 'stok' : true)
+            .map(tab => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key as any)}
               className={`px-5 py-3 text-sm font-semibold rounded-t-xl transition-colors ${activeTab === tab.key ? 'bg-[#161b22] text-white border border-b-0 border-white/10' : 'text-gray-500 hover:text-gray-300'}`}>
               {tab.label}

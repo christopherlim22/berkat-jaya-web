@@ -3,29 +3,33 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { createClient } from "@/utils/supabase/client"
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { getUserRole } from "@/utils/supabase/getUserRole"
 
 const navItems = [
-  { icon: "▦", label: "Dashboard", href: "/dashboard" },
-  { icon: "📦", label: "Pesanan", href: "/dashboard/pesanan" },
-  { icon: "🛒", label: "Kasir", href: "/dashboard/kasir" },
-  { icon: "🧾", label: "Transaksi", href: "/dashboard/transaksi" },
-  { icon: "📝", label: "Piutang", href: "/dashboard/piutang" },
-  { icon: "🧾", label: "Utang", href: "/dashboard/utang-supplier" },
-  { icon: "🐔", label: "Stok", href: "/dashboard/stok-ayam" },
-  { icon: "💸", label: "Pengeluaran", href: "/dashboard/pengeluaran" },
-  { icon: "🚚", label: "Pengiriman", href: "/dashboard/pengiriman" },
-  { icon: "🗄️", label: "Master Data", href: "/dashboard/master-data" },
-  { icon: "📊", label: "Laporan", href: "/dashboard/laporan" },
-  { icon: "💧", label: "Arus Kas", href: "/dashboard/arus-kas" },
-  { icon: "📋", label: "Rekap", href: "/dashboard/rekap" },
-  { icon: "⚙️", label: "Pengaturan", href: "/dashboard/pengaturan" },
+  { icon: "▦", label: "Dashboard", href: "/dashboard", allowedRoles: ['admin'] },
+  { icon: "📦", label: "Pesanan & Pengiriman", href: "/dashboard/pesanan", allowedRoles: ['admin','kasir'] },
+  { icon: "🛒", label: "Kasir", href: "/dashboard/kasir", allowedRoles: ['admin','kasir'] },
+  { icon: "🧾", label: "Transaksi", href: "/dashboard/transaksi", allowedRoles: ['admin','kasir'] },
+  { icon: "📝", label: "Piutang", href: "/dashboard/piutang", allowedRoles: ['admin'] },
+  { icon: "🧾", label: "Utang", href: "/dashboard/utang-supplier", allowedRoles: ['admin'] },
+  { icon: "🐔", label: "Stok", href: "/dashboard/stok-ayam", allowedRoles: ['admin','kasir'] },
+  { icon: "💸", label: "Pengeluaran", href: "/dashboard/pengeluaran", allowedRoles: ['admin'] },
+  { icon: "🗄️", label: "Master Data", href: "/dashboard/master-data", allowedRoles: ['admin'] },
+  { icon: "📊", label: "Laporan", href: "/dashboard/laporan", allowedRoles: ['admin'] },
+  { icon: "📋", label: "Rekap", href: "/dashboard/rekap", allowedRoles: ['admin'] },
+  { icon: "⚙️", label: "Pengaturan", href: "/dashboard/pengaturan", allowedRoles: ['admin'] },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [isOpen, setIsOpen] = useState(false)
+  const [role, setRole] = useState<'admin' | 'kasir' | null>(null)
+
+  useEffect(() => {
+    getUserRole().then(r => setRole(r))
+  }, [])
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -87,7 +91,7 @@ export function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 px-4 py-5 space-y-1.5 overflow-y-auto">
-          {navItems.map((item) => {
+          {role && navItems.filter(item => item.allowedRoles.includes(role)).map((item) => {
             const isActive =
               item.href === "/dashboard"
                 ? pathname === "/dashboard"
@@ -114,12 +118,18 @@ export function Sidebar() {
         {/* User + Logout */}
         <div className="px-4 py-5 border-t border-white/[0.06]">
           <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 mb-2">
-            <div className="w-10 h-10 rounded-full bg-green-600 flex items-center justify-center text-sm font-bold text-white shrink-0">
-              AD
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0 ${role === 'kasir' ? 'bg-blue-600' : 'bg-green-600'}`}>
+              {role === 'kasir' ? 'KS' : 'AD'}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-base font-semibold text-white truncate">Admin</p>
-              <p className="text-xs text-gray-500 truncate">admin@berkatjaya.id</p>
+              <p className="text-base font-semibold text-white truncate">{role === 'kasir' ? 'Kasir' : 'Admin'}</p>
+              <div className="mt-1">
+                {role === 'kasir' ? (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">KASIR</span>
+                ) : (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20">ADMIN</span>
+                )}
+              </div>
             </div>
           </div>
           <button
