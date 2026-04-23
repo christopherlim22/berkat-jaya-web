@@ -20,6 +20,10 @@ export default function PiutangPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<string>("Belum Lunas")
   const [searchQuery, setSearchQuery] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<'list' | 'kartu'>('list')
+
+  // Kartu Piutang
+  const [kartuPembeli, setKartuPembeli] = useState<string>("")
 
   const [selectedTx, setSelectedTx] = useState<Piutang | null>(null)
   const [amountPaid, setAmountPaid] = useState<string>("")
@@ -87,6 +91,29 @@ export default function PiutangPage() {
     return filteredData.reduce((acc, tx) => acc + (tx.sisa || 0), 0)
   }, [filteredData, searchQuery])
 
+  const allPembeli = useMemo(() => {
+    const names = Array.from(new Set(piutangData.map(tx => tx.nama_pembeli))).sort()
+    return names
+  }, [piutangData])
+
+  const kartuStats = useMemo(() => {
+    if (!kartuPembeli) return null
+    const txList = piutangData.filter(tx => tx.nama_pembeli === kartuPembeli)
+    return {
+      totalTrx: txList.length,
+      totalNilai: txList.reduce((acc, tx) => acc + tx.total, 0),
+      totalTerbayar: txList.reduce((acc, tx) => acc + (tx.terbayar || 0), 0),
+      totalSisa: txList.reduce((acc, tx) => acc + tx.sisa, 0),
+    }
+  }, [piutangData, kartuPembeli])
+
+  const kartuRiwayat = useMemo(() => {
+    if (!kartuPembeli) return []
+    return piutangData
+      .filter(tx => tx.nama_pembeli === kartuPembeli)
+      .sort((a, b) => b.sisa - a.sisa)
+  }, [piutangData, kartuPembeli])
+
   const openPaymentModal = (tx: Piutang) => {
     setSelectedTx(tx)
     setAmountPaid(tx.sisa.toString())
@@ -133,9 +160,136 @@ export default function PiutangPage() {
           <h2 className="text-3xl font-bold text-white tracking-tight">Data Piutang</h2>
           <p className="text-base text-gray-500 mt-1">Kelola hutang pelanggan (Accounts Receivable)</p>
         </div>
+        <div className="flex bg-[#161b22] border border-white/10 rounded-xl overflow-hidden h-10">
+          <button onClick={() => setActiveTab('list')}
+            className={`px-5 h-full text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+            📋 Daftar Piutang
+          </button>
+          <button onClick={() => setActiveTab('kartu')}
+            className={`px-5 h-full text-sm font-medium transition-colors ${activeTab === 'kartu' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+            🗂️ Kartu Piutang
+          </button>
+        </div>
       </header>
 
       <main className="p-8 space-y-8">
+
+        {/* KARTU PIUTANG TAB */}
+        {activeTab === 'kartu' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Pembeli selector */}
+            <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5 flex flex-col md:flex-row items-center gap-4">
+              <label className="text-gray-300 text-sm font-medium whitespace-nowrap">Pilih Pembeli:</label>
+              <select value={kartuPembeli} onChange={e => setKartuPembeli(e.target.value)}
+                className="flex-1 h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-orange-500/50 max-w-sm">
+                <option value="">-- Pilih nama pembeli --</option>
+                {allPembeli.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+
+            {!kartuPembeli ? (
+              <div className="p-20 text-center text-gray-500 flex flex-col items-center bg-[#161b22] border border-white/[0.05] rounded-2xl">
+                <span className="text-5xl mb-4 grayscale opacity-40">🗂️</span>
+                <p className="text-lg">Pilih nama pembeli untuk melihat kartu piutang.</p>
+              </div>
+            ) : (
+              <>
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5">
+                    <p className="text-gray-400 text-xs mb-1">Total Transaksi</p>
+                    <h3 className="text-2xl font-bold text-white">{kartuStats?.totalTrx ?? 0} <span className="text-sm text-gray-500 font-normal">nota</span></h3>
+                  </div>
+                  <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5">
+                    <p className="text-gray-400 text-xs mb-1">Total Nilai</p>
+                    <h3 className="text-xl font-bold text-white">{formatRp(kartuStats?.totalNilai ?? 0)}</h3>
+                  </div>
+                  <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5">
+                    <p className="text-gray-400 text-xs mb-1">Total Terbayar</p>
+                    <h3 className="text-xl font-bold text-green-400">{formatRp(kartuStats?.totalTerbayar ?? 0)}</h3>
+                  </div>
+                  <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-20 h-20 bg-red-500/10 rounded-full blur-2xl -mr-4 -mt-4"></div>
+                    <div className="relative z-10">
+                      <p className="text-gray-400 text-xs mb-1">Sisa Piutang</p>
+                      <h3 className={`text-xl font-bold ${(kartuStats?.totalSisa ?? 0) > 0 ? 'text-red-400' : 'text-gray-500'}`}>
+                        {formatRp(kartuStats?.totalSisa ?? 0)}
+                      </h3>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Riwayat table */}
+                <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden shadow-xl">
+                  <div className="p-5 border-b border-white/[0.05] bg-[#0d1117]/50">
+                    <h4 className="text-white font-semibold">Riwayat Piutang — {kartuPembeli}</h4>
+                    <p className="text-xs text-gray-500 mt-0.5">Diurutkan berdasarkan sisa hutang terbesar</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm text-gray-300">
+                      <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
+                        <tr>
+                          <th className="px-6 py-4 font-medium">No. Nota</th>
+                          <th className="px-6 py-4 font-medium">Tanggal</th>
+                          <th className="px-6 py-4 font-medium text-right">Total</th>
+                          <th className="px-6 py-4 font-medium text-right">Terbayar</th>
+                          <th className="px-6 py-4 font-medium text-right">Sisa</th>
+                          <th className="px-6 py-4 font-medium text-center">Status</th>
+                          <th className="px-6 py-4 font-medium text-center">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/[0.02]">
+                        {kartuRiwayat.map(tx => {
+                          const isLunas = tx.status === 'lunas'
+                          return (
+                            <tr key={tx.id} className="hover:bg-white/[0.01] transition-colors">
+                              <td className="px-6 py-4 font-mono text-gray-400 whitespace-nowrap">{tx.no_nota}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{formatDate(tx.tanggal)}</td>
+                              <td className="px-6 py-4 text-right text-white">{formatRp(tx.total)}</td>
+                              <td className="px-6 py-4 text-right text-gray-400">{formatRp(tx.terbayar || 0)}</td>
+                              <td className={`px-6 py-4 text-right font-bold ${isLunas ? 'text-gray-500' : 'text-red-400'}`}>{formatRp(tx.sisa)}</td>
+                              <td className="px-6 py-4 text-center">
+                                <span className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${isLunas ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
+                                  {isLunas ? 'Lunas' : 'Belum Lunas'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                {!isLunas ? (
+                                  <button onClick={() => openPaymentModal(tx)}
+                                    className="bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 px-4 py-2 rounded-lg text-xs font-semibold transition-all border border-orange-500/20">
+                                    Bayar
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-500 text-xs italic">Selesai</span>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      {kartuStats && (
+                        <tfoot className="border-t border-white/10 bg-[#0d1117]/50 text-sm">
+                          <tr>
+                            <td colSpan={2} className="px-6 py-4 text-right font-medium text-gray-400">Total:</td>
+                            <td className="px-6 py-4 text-right font-bold text-white">{formatRp(kartuStats.totalNilai)}</td>
+                            <td className="px-6 py-4 text-right font-bold text-green-400">{formatRp(kartuStats.totalTerbayar)}</td>
+                            <td className={`px-6 py-4 text-right font-bold ${kartuStats.totalSisa > 0 ? 'text-red-400' : 'text-gray-500'}`}>{formatRp(kartuStats.totalSisa)}</td>
+                            <td colSpan={2}></td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* DAFTAR PIUTANG TAB */}
+        {activeTab === 'list' && <div className="space-y-8">
         <div className="grid grid-cols-3 gap-6">
           <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-6 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/10 rounded-full blur-3xl -mr-10 -mt-10"></div>
@@ -163,15 +317,15 @@ export default function PiutangPage() {
         <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden shadow-xl">
           <div className="p-5 border-b border-white/[0.05] flex flex-col md:flex-row gap-4 justify-between items-center bg-[#0d1117]/50">
             <div className="flex items-center gap-3 w-full md:w-auto flex-1">
-              <div className="relative w-full max-w-sm">
+              <div className="relative w-full max-w-sm h-10">
                 <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">🔍</span>
                 <input type="text" placeholder="Cari nama pembeli..." value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl pl-9 pr-4 py-2.5 focus:outline-none focus:border-orange-500/50 hover:border-white/20 transition-colors"
+                  className="w-full h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl pl-9 pr-4 focus:outline-none focus:border-orange-500/50 hover:border-white/20 transition-colors"
                 />
               </div>
               <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-orange-500/50"
+                className="h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-orange-500/50"
               >
                 <option value="Semua">Tampilkan Semua</option>
                 <option value="Belum Lunas">Belum Lunas</option>
@@ -179,7 +333,7 @@ export default function PiutangPage() {
               </select>
             </div>
             <button onClick={fetchPiutang}
-              className="bg-white/5 hover:bg-white/10 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 border border-white/5"
+              className="h-10 bg-white/5 hover:bg-white/10 text-white px-4 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 border border-white/5"
             >
               🔄 Segarkan Data
             </button>
@@ -256,6 +410,7 @@ export default function PiutangPage() {
             )}
           </div>
         </div>
+        </div>}
       </main>
 
       {/* PAYMENT MODAL */}
@@ -325,8 +480,8 @@ export default function PiutangPage() {
 
               <div className="space-y-1.5">
                 <label className="text-gray-300 text-sm font-medium">Tanggal Pembayaran</label>
-                <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white text-base rounded-xl px-4 py-3 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
+                <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} onClick={e => (e.target as any).showPicker?.()}
+                  className="w-full cursor-pointer bg-[#0d1117] border border-white/10 text-white text-base rounded-xl px-4 py-3 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert"
                 />
               </div>
             </div>

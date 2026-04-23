@@ -11,7 +11,6 @@ type Supplier = {
   nama: string
   kontak: string
   alamat: string
-  syarat_pembayaran: string
   catatan: string
   aktif: boolean
 }
@@ -24,7 +23,7 @@ export function SupplierTab() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [formData, setFormData] = useState({
-    nama: "", kontak: "", alamat: "", syarat_pembayaran: "tunai", catatan: "", aktif: true
+    nama: "", kontak: "", alamat: "", catatan: "", aktif: true
   })
 
   useEffect(() => { fetchSupplier() }, [])
@@ -42,10 +41,10 @@ export function SupplierTab() {
   const handleOpenModal = (s?: Supplier) => {
     if (s) {
       setEditingId(s.id)
-      setFormData({ nama: s.nama || "", kontak: s.kontak || "", alamat: s.alamat || "", syarat_pembayaran: s.syarat_pembayaran || "tunai", catatan: s.catatan || "", aktif: s.aktif ?? true })
+      setFormData({ nama: s.nama || "", kontak: s.kontak || "", alamat: s.alamat || "", catatan: s.catatan || "", aktif: s.aktif ?? true })
     } else {
       setEditingId(null)
-      setFormData({ nama: "", kontak: "", alamat: "", syarat_pembayaran: "tunai", catatan: "", aktif: true })
+      setFormData({ nama: "", kontak: "", alamat: "", catatan: "", aktif: true })
     }
     setIsModalOpen(true)
   }
@@ -122,7 +121,6 @@ export function SupplierTab() {
                 <tr>
                   <th className="px-6 py-4 font-medium">Nama</th>
                   <th className="px-6 py-4 font-medium">Kontak</th>
-                  <th className="px-6 py-4 font-medium">Syarat Bayar</th>
                   <th className="px-6 py-4 font-medium">Alamat</th>
                   <th className="px-6 py-4 font-medium">Catatan</th>
                   <th className="px-6 py-4 font-medium text-center">Aksi</th>
@@ -138,13 +136,6 @@ export function SupplierTab() {
                       </div>
                     </td>
                     <td className="px-6 py-4 font-mono text-gray-400">{s.kontak || "-"}</td>
-                    <td className="px-6 py-4">
-                      {s.syarat_pembayaran === 'tempo' ? (
-                        <span className="text-orange-400 text-xs font-semibold px-2 py-1 bg-orange-500/10 rounded border border-orange-500/20 capitalize">{s.syarat_pembayaran}</span>
-                      ) : (
-                        <span className="text-green-400 text-xs font-semibold px-2 py-1 bg-green-500/10 rounded border border-green-500/20 capitalize">{s.syarat_pembayaran}</span>
-                      )}
-                    </td>
                     <td className="px-6 py-4 text-gray-400 max-w-[200px] truncate" title={s.alamat}>{s.alamat || "-"}</td>
                     <td className="px-6 py-4 text-gray-500 max-w-[150px] truncate text-xs italic">{s.catatan || "-"}</td>
                     <td className="px-6 py-4 text-center">
@@ -194,14 +185,6 @@ export function SupplierTab() {
                 <textarea value={formData.alamat} onChange={e => setFormData({ ...formData, alamat: e.target.value })}
                   className="w-full bg-[#0d1117] border border-white/10 text-white rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-green-500 min-h-[60px]"
                   placeholder="Alamat lengkap..." />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-gray-300">Syarat Pembayaran</Label>
-                <select value={formData.syarat_pembayaran} onChange={e => setFormData({ ...formData, syarat_pembayaran: e.target.value })}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-md px-3 py-2 h-10 text-sm focus:outline-none focus:ring-1 focus:ring-green-500">
-                  <option value="tunai">Tunai</option>
-                  <option value="tempo">Tempo</option>
-                </select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-gray-300">Catatan Khusus</Label>

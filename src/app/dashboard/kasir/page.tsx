@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { supabase } from "@/lib/supabase"
+import { supabase } from "@/utils/supabase/client"
 
 type Product = {
   id: number
@@ -21,9 +21,13 @@ type CartItem = {
   nama: string
   harga_jual: number
   satuan: string
-  qty: number
+  qty: number | string
   keterangan?: string
 }
+
+const MIN_PANEL_WIDTH = 350
+const MAX_PANEL_WIDTH = 700
+const DEFAULT_PANEL_WIDTH = 450
 
 export default function KasirPage() {
   const [products, setProducts] = useState<Product[]>([])
@@ -35,6 +39,12 @@ export default function KasirPage() {
   const [customers, setCustomers] = useState<string[]>([])
   const [piutangNames, setPiutangNames] = useState<Set<string>>(new Set())
   const [showSuggestions, setShowSuggestions] = useState(false)
+
+  // Drag-resize state
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStartX = useRef(0)
+  const dragStartWidth = useRef(DEFAULT_PANEL_WIDTH)
 
   // Auto-generate No. Nota and Tanggal only on client side to avoid hydration mismatch
   const [noNota, setNoNota] = useState("")
@@ -73,28 +83,55 @@ export default function KasirPage() {
     const dd = String(today.getDate()).padStart(2, "0")
     const randSequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")
     setNoNota(`BJ-${yyyy}${mm}${dd}-${randSequence}`)
-    setTanggal(today.toLocaleDateString("id-ID", { year: "numeric", month: "long", day: "numeric" }))
+    const tzOffset = today.getTimezoneOffset() * 60000
+    const localISOTime = (new Date(today.getTime() - tzOffset)).toISOString().split('T')[0]
+    setTanggal(localISOTime)
   }, [])
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragStartX.current = e.clientX
+    dragStartWidth.current = panelWidth
+    setIsDragging(true)
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = dragStartX.current - ev.clientX // dragging left = wider panel
+      const newWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, dragStartWidth.current + delta))
+      setPanelWidth(newWidth)
+    }
+
+    const onMouseUp = () => {
+      setIsDragging(false)
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [panelWidth])
 
   const formatRp = (num: number) => {
     return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(num)
+  }
+
+  const getQtyNum = (qty: number | string) => {
+    if (qty === "") return 0
+    const q = parseFloat(qty as string)
+    return isNaN(q) ? 0 : q
   }
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
       const existing = prev.find((item) => item.id === product.id)
       if (existing) {
-        return prev.map((item) => (item.id === product.id ? { ...item, qty: item.qty + 1 } : item))
+        return prev.map((item) => (item.id === product.id ? { ...item, qty: getQtyNum(item.qty) + 1 } : item))
       }
       return [...prev, { id: product.id, nama: product.nama, harga_jual: 0, satuan: product.satuan || "kg", qty: 1, keterangan: "" }]
     })
   }
 
   const updateQty = (id: number, val: string) => {
-    const newQty = parseFloat(val)
-    if (isNaN(newQty) || newQty < 0) return
-
-    setCart((prev) => prev.map((item) => (item.id === id ? { ...item, qty: newQty } : item)))
+    setCart((prev) => prev.map((item) => (item.id === id ? { ...item, qty: val } : item)))
   }
 
   const updatePrice = (id: number, val: string) => {
@@ -110,7 +147,7 @@ export default function KasirPage() {
     setCart((prev) => prev.filter((item) => item.id !== id))
   }
 
-  const grandTotal = cart.reduce((acc, item) => acc + (item.harga_jual || 0) * item.qty, 0)
+  const grandTotal = cart.reduce((acc, item) => acc + (item.harga_jual || 0) * getQtyNum(item.qty), 0)
 
   const handleSimpan = async () => {
     if (cart.length === 0) {
@@ -121,11 +158,17 @@ export default function KasirPage() {
       alert("Mohon isi Nama Pembeli!")
       return
     }
-    
+
+    const invalidQty = cart.find(c => getQtyNum(c.qty) <= 0)
+    if (invalidQty) {
+      alert("Qty tidak boleh kosong atau nol")
+      return
+    }
+
     setIsLoading(true)
     try {
       // 1. Save to transaksi
-      const dbTanggal = new Date().toISOString()
+      const dbTanggal = new Date(tanggal).toISOString()
       const { data: transaksiData, error: transaksiError } = await supabase
         .from('transaksi')
         .insert({
@@ -146,9 +189,9 @@ export default function KasirPage() {
       const detailInserts = cart.map((item) => ({
         transaksi_id,
         nama_produk: item.nama,
-        qty: item.qty,
+        qty: getQtyNum(item.qty),
         harga: item.harga_jual || 0,
-        subtotal: (item.harga_jual || 0) * item.qty,
+        subtotal: (item.harga_jual || 0) * getQtyNum(item.qty),
         keterangan: item.keterangan || null
       }))
 
@@ -175,12 +218,12 @@ export default function KasirPage() {
       }
 
       alert(`Transaksi Berhasil Disimpan!\n\nNo Nota: ${noNota}`)
-      
+
       // Reset form
       setCart([])
       setNamaPembeli("")
       setPembayaran("Tunai")
-      
+
       // Regenerate No Nota correctly
       const randSequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")
       const today = new Date()
@@ -213,9 +256,9 @@ export default function KasirPage() {
         </div>
       </header>
 
-      <main className="flex h-[calc(100vh-89px)]">
+      <main className={`flex h-[calc(100vh-89px)] ${isDragging ? 'select-none cursor-col-resize' : ''}`}>
         {/* LEFT COLUMN - PRODUCTS GRID */}
-        <div className="flex-1 p-8 overflow-y-auto border-r border-white/[0.05]">
+        <div className="flex-1 p-8 overflow-y-auto">
           <div className="flex items-center justify-between mb-6">
             <h3 className="font-bold text-white text-xl">Daftar Produk</h3>
             <span className="text-sm text-gray-400 bg-white/[0.03] px-3 py-1.5 rounded-lg border border-white/[0.05]">
@@ -223,9 +266,9 @@ export default function KasirPage() {
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {products.length === 0 ? (
-              <div className="col-span-3 text-center py-12 text-gray-500">Memuat produk...</div>
+              <div className="col-span-full text-center py-12 text-gray-500">Memuat produk...</div>
             ) : (
               products.map((prod) => (
                 <button
@@ -242,26 +285,49 @@ export default function KasirPage() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN - TRANSACTION FORM */}
-        <div className="w-[450px] bg-[#161b22] flex flex-col shrink-0">
-          <div className="px-6 py-5 border-b border-white/[0.05] bg-black/20">
-            <h3 className="font-bold text-white text-xl flex items-center gap-2">
-              <span className="text-green-500">🧾</span> Detail Transaksi
-            </h3>
-          </div>
-
-          <div className="p-6 space-y-5 overflow-y-auto flex-1">
-            {/* Form Info */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-gray-400 text-sm">No. Nota</Label>
-                <p className="text-white font-mono bg-[#0d1117] border border-white/5 px-3 py-2.5 rounded-lg text-sm">{noNota || "Memuat..."}</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-gray-400 text-sm">Tanggal</Label>
-                <p className="text-white bg-[#0d1117] border border-white/5 px-3 py-2.5 rounded-lg text-sm truncate">{tanggal || "Memuat..."}</p>
-              </div>
+        {/* RESIZE HANDLE */}
+        {cart.length > 0 && (
+          <div
+            onMouseDown={handleDragStart}
+            className={`relative flex-shrink-0 w-1.5 cursor-col-resize group z-10 transition-colors
+              ${isDragging ? 'bg-green-500/60' : 'bg-white/10 hover:bg-green-500/50'}`}
+          >
+            {/* Visual dots indicator */}
+            <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 flex flex-col items-center justify-center gap-1.5 pointer-events-none">
+              {[0,1,2,3,4].map(i => (
+                <span key={i} className={`block w-0.5 h-0.5 rounded-full transition-colors ${isDragging ? 'bg-green-300' : 'bg-white/30 group-hover:bg-green-400'}`} />
+              ))}
             </div>
+          </div>
+        )}
+
+        {/* RIGHT COLUMN - TRANSACTION FORM */}
+        <div
+          className={`bg-[#161b22] shrink-0 border-white/[0.05] overflow-hidden ${
+            cart.length > 0 ? 'border-l' : 'w-0 border-l-0'
+          }`}
+          style={cart.length > 0 ? { width: panelWidth } : undefined}
+        >
+          <div className="flex flex-col h-full" style={{ width: panelWidth }}>
+            <div className="px-6 py-5 border-b border-white/[0.05] bg-black/20 flex justify-between items-center">
+              <h3 className="font-bold text-white text-xl flex items-center gap-2">
+                <span className="text-green-500">🧾</span> Detail Transaksi
+              </h3>
+            </div>
+
+            <div className="p-6 space-y-5 overflow-y-auto flex-1">
+              {/* Form Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-gray-400 text-sm">No. Nota</Label>
+                  <p className="text-white font-mono bg-[#0d1117] border border-white/5 px-3 py-2.5 rounded-lg text-sm">{noNota || "Memuat..."}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-gray-400 text-sm">Tanggal</Label>
+                  <input type="date" value={tanggal} onChange={e => setTanggal(e.target.value)} onClick={e => (e.target as any).showPicker?.()}
+                    className="w-full cursor-pointer bg-[#0d1117] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                </div>
+              </div>
 
             <div className="space-y-1.5 relative">
               <Label className="text-gray-300 text-base">Nama Pembeli</Label>
@@ -283,18 +349,18 @@ export default function KasirPage() {
                     {customers
                       .filter(c => c.toLowerCase().includes(namaPembeli.toLowerCase()))
                       .map((c, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => {
-                          setNamaPembeli(c)
-                          setShowSuggestions(false)
-                        }}
-                        className="w-full text-left px-4 py-2.5 text-white hover:bg-white/10 transition-colors"
-                      >
-                        {c}
-                      </button>
-                    ))}
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => {
+                            setNamaPembeli(c)
+                            setShowSuggestions(false)
+                          }}
+                          className="w-full text-left px-4 py-2.5 text-white hover:bg-white/10 transition-colors"
+                        >
+                          {c}
+                        </button>
+                      ))}
                     {customers.filter(c => c.toLowerCase().includes(namaPembeli.toLowerCase())).length === 0 && (
                       <div className="px-4 py-2.5 text-gray-500 text-sm">Ketikan nama pembeli baru...</div>
                     )}
@@ -328,7 +394,7 @@ export default function KasirPage() {
             {/* Cart Items */}
             <div className="space-y-3">
               <Label className="text-gray-300 text-base mb-1 block">Daftar Belanjaan</Label>
-              
+
               {cart.length === 0 ? (
                 <div className="text-center py-8 bg-[#0d1117] border border-white/5 rounded-xl border-dashed">
                   <span className="text-3xl grayscale opacity-50 block mb-2">🛒</span>
@@ -338,7 +404,7 @@ export default function KasirPage() {
                 <div className="space-y-3">
                   {cart.map((item) => (
                     <div key={item.id} className="bg-[#0d1117] border border-white/[0.06] rounded-xl p-3 flex flex-col gap-2 relative group">
-                      <button 
+                      <button
                         onClick={() => removeItem(item.id)}
                         className="absolute -top-2 -right-2 bg-red-500 text-white w-6 h-6 rounded-full text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
                       >
@@ -365,7 +431,7 @@ export default function KasirPage() {
                           <div className="flex items-center bg-[#161b22] border border-white/10 rounded-md h-8 overflow-hidden">
                             <button
                               onClick={() => {
-                                const currentQty = item.qty || 0;
+                                const currentQty = getQtyNum(item.qty);
                                 const val = Math.max(0.1, Number((currentQty - 1).toFixed(1)));
                                 updateQty(item.id, val.toString());
                               }}
@@ -375,15 +441,15 @@ export default function KasirPage() {
                             </button>
                             <input
                               type="number"
-                              min="0.1"
+                              min="0"
                               step="0.1"
-                              value={item.qty || ""}
+                              value={item.qty}
                               onChange={(e) => updateQty(item.id, e.target.value)}
                               className="bg-transparent border-none text-white h-full w-14 px-1 text-center text-sm font-semibold focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none m-0"
                             />
                             <button
                               onClick={() => {
-                                const currentQty = item.qty || 0;
+                                const currentQty = getQtyNum(item.qty);
                                 const val = Number((currentQty + 1).toFixed(1));
                                 updateQty(item.id, val.toString());
                               }}
@@ -411,32 +477,33 @@ export default function KasirPage() {
             </div>
           </div>
 
-          {/* Footer Totals & CTA */}
-          <div className="p-6 border-t border-white/[0.05] bg-black/20 space-y-4 shadow-[0_-10px_40px_rgba(0,0,0,0.2)] z-10">
-            <div className="flex items-center justify-between pb-2 border-b border-white/5">
-              <span className="text-gray-400 text-lg">Subtotal</span>
-              <span className="text-white text-lg font-medium">{formatRp(grandTotal)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-white text-xl font-medium">Total Akhir</span>
-              <span className="text-green-400 text-3xl font-bold tracking-tight">{formatRp(grandTotal)}</span>
-            </div>
+            {/* Footer Totals & CTA */}
+            <div className="p-6 border-t border-white/[0.05] bg-black/20 space-y-4 shadow-[0_-10px_40px_rgba(0,0,0,0.2)] z-10 w-full">
+              <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                <span className="text-gray-400 text-lg">Subtotal</span>
+                <span className="text-white text-lg font-medium">{formatRp(grandTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-white text-xl font-medium">Total Akhir</span>
+                <span className="text-green-400 text-3xl font-bold tracking-tight">{formatRp(grandTotal)}</span>
+              </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <Button 
-                onClick={handleBatal}
-                variant="outline" 
-                className="h-14 border-red-500/50 hover:bg-red-500/10 hover:border-red-500 text-red-400 text-base"
-              >
-                Batalkan
-              </Button>
-              <Button 
-                onClick={handleSimpan}
-                disabled={isLoading}
-                className="h-14 bg-green-600 hover:bg-green-500 text-white text-base shadow-lg shadow-green-900/20"
-              >
-                {isLoading ? "Menyimpan..." : "Simpan Transaksi"}
-              </Button>
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <Button
+                  onClick={handleBatal}
+                  variant="outline"
+                  className="h-14 border-red-500/50 hover:bg-red-500/10 hover:border-red-500 text-red-400 text-base"
+                >
+                  Batalkan
+                </Button>
+                <Button
+                  onClick={handleSimpan}
+                  disabled={isLoading}
+                  className="h-14 bg-green-600 hover:bg-green-500 text-white text-base shadow-lg shadow-green-900/20"
+                >
+                  {isLoading ? "Menyimpan..." : "Simpan Transaksi"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

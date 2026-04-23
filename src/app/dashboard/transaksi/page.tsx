@@ -50,6 +50,8 @@ export default function TransaksiPage() {
 
   // Modal
   const [selectedTx, setSelectedTx] = useState<Transaksi | null>(null)
+  const [hppMap, setHppMap] = useState<Record<string, number>>({})
+  const [isHppLoading, setIsHppLoading] = useState(false)
 
   useEffect(() => {
     const now = new Date()
@@ -59,6 +61,23 @@ export default function TransaksiPage() {
   }, [])
 
   useEffect(() => { fetchTransactions() }, [])
+
+  useEffect(() => {
+    if (!selectedTx) { setHppMap({}); return }
+    const produkNames = Array.from(new Set((selectedTx.transaksi_detail || []).map(d => d.nama_produk)))
+    if (produkNames.length === 0) return
+    setIsHppLoading(true)
+    Promise.all(
+      produkNames.map(nama =>
+        supabase.from('hpp').select('hpp_satuan').eq('nama_produk', nama).order('tanggal', { ascending: false }).limit(1).single()
+          .then(({ data }) => ({ nama, hpp_satuan: data?.hpp_satuan ?? 0 }))
+      )
+    ).then(results => {
+      const map: Record<string, number> = {}
+      results.forEach(r => { map[r.nama] = r.hpp_satuan })
+      setHppMap(map)
+    }).finally(() => setIsHppLoading(false))
+  }, [selectedTx])
 
   const fetchTransactions = async () => {
     setIsLoading(true)
@@ -201,17 +220,17 @@ export default function TransaksiPage() {
 
         {/* FILTERS */}
         <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden shadow-xl">
-          <div className="p-5 border-b border-white/[0.05] flex flex-col gap-4 bg-[#0d1117]/50">
+          <div className="p-5 border-b border-white/[0.05] flex flex-wrap justify-between items-center gap-4 bg-[#0d1117]/50">
             {/* Mode toggle + filters */}
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3 flex-1">
               {/* Mode toggle */}
-              <div className="flex bg-[#0d1117] border border-white/10 rounded-xl overflow-hidden">
+              <div className="flex bg-[#0d1117] border border-white/10 rounded-xl overflow-hidden h-10 items-center">
                 <button onClick={() => setFilterMode('harian')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${filterMode === 'harian' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                  className={`px-4 h-full text-sm font-medium transition-colors flex items-center ${filterMode === 'harian' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>
                   📅 Harian
                 </button>
                 <button onClick={() => setFilterMode('bulanan')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${filterMode === 'bulanan' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                  className={`px-4 h-full text-sm font-medium transition-colors flex items-center ${filterMode === 'bulanan' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>
                   📆 Bulanan
                 </button>
               </div>
@@ -219,10 +238,12 @@ export default function TransaksiPage() {
               {/* Harian: date picker */}
               {filterMode === 'harian' && (
                 <>
-                  <input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)}
-                    className="bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-green-500/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                  <div className="w-full max-w-[180px]">
+                    <input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)} onClick={e => (e.target as any).showPicker?.()}
+                      className="w-full cursor-pointer h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-green-500/50 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                  </div>
                   {dateFilter && (
-                    <button onClick={() => setDateFilter('')} className="text-xs text-gray-500 hover:text-red-400 transition-colors px-2 font-medium">
+                    <button onClick={() => setDateFilter('')} className="h-10 text-xs text-gray-500 hover:text-red-400 transition-colors px-2 font-medium flex items-center">
                       ✕ Hapus Filter
                     </button>
                   )}
@@ -233,11 +254,11 @@ export default function TransaksiPage() {
               {filterMode === 'bulanan' && (
                 <>
                   <select value={bulanFilter} onChange={e => setBulanFilter(parseInt(e.target.value))}
-                    className="bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-green-500/50">
+                    className="h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-green-500/50">
                     {MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
                   </select>
                   <select value={tahunFilter} onChange={e => setTahunFilter(parseInt(e.target.value))}
-                    className="bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-green-500/50">
+                    className="h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-green-500/50">
                     {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                 </>
@@ -245,7 +266,7 @@ export default function TransaksiPage() {
 
               {/* Payment filter */}
               <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)}
-                className="bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-green-500/50">
+                className="h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl px-4 focus:outline-none focus:border-green-500/50">
                 <option value="Semua">Semua Pembayaran</option>
                 <option value="Tunai">Tunai</option>
                 <option value="Transfer">Transfer</option>
@@ -258,9 +279,9 @@ export default function TransaksiPage() {
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">🔍</span>
               <input type="text" placeholder="Cari nama pembeli atau no. nota..."
                 value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                className="w-full bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl pl-9 pr-4 py-2.5 focus:outline-none focus:border-green-500/50 hover:border-white/20 transition-colors" />
+                className="w-full h-10 bg-[#0d1117] border border-white/10 text-white text-sm rounded-xl pl-9 pr-4 focus:outline-none focus:border-green-500/50 hover:border-white/20 transition-colors" />
               {searchQuery && (
-                <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-3 flex items-center text-gray-500 hover:text-red-400 text-xs">✕</button>
+                <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-3 flex items-center text-gray-500 hover:text-red-400 text-xs h-full">✕</button>
               )}
             </div>
           </div>
@@ -328,7 +349,7 @@ export default function TransaksiPage() {
       {/* DETAIL MODAL */}
       {selectedTx && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-white/5 bg-black/20">
               <div>
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
@@ -370,6 +391,12 @@ export default function TransaksiPage() {
               </h4>
 
               <div className="bg-[#0d1117] border border-white/5 rounded-xl overflow-hidden">
+                {isHppLoading && (
+                  <div className="px-5 py-2 text-xs text-gray-500 flex items-center gap-2 border-b border-white/5">
+                    <div className="w-3 h-3 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin"></div>
+                    Memuat data HPP...
+                  </div>
+                )}
                 <table className="w-full text-left text-sm text-gray-300">
                   <thead className="bg-[#161b22] border-b border-white/5 text-xs text-gray-400 uppercase">
                     <tr>
@@ -377,29 +404,64 @@ export default function TransaksiPage() {
                       <th className="px-5 py-3 text-center">Qty</th>
                       <th className="px-5 py-3 text-right">Harga</th>
                       <th className="px-5 py-3 text-right">Subtotal</th>
+                      <th className="px-5 py-3 text-right">HPP</th>
+                      <th className="px-5 py-3 text-right">Laba Kotor</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/[0.02]">
-                    {(selectedTx.transaksi_detail || []).map((item) => (
-                      <tr key={item.id} className="hover:bg-white/[0.02]">
-                        <td className="px-5 py-4">
-                          <p className="font-semibold text-white">{item.nama_produk}</p>
-                          {item.keterangan && <p className="text-xs text-gray-500 mt-1">↳ {item.keterangan}</p>}
-                        </td>
-                        <td className="px-5 py-4 text-center">{item.qty}</td>
-                        <td className="px-5 py-4 text-right">{formatRp(item.harga)}</td>
-                        <td className="px-5 py-4 text-right font-medium text-white">{formatRp(item.subtotal)}</td>
-                      </tr>
-                    ))}
+                    {(selectedTx.transaksi_detail || []).map((item) => {
+                      const hppTotal = item.qty * (hppMap[item.nama_produk] ?? 0)
+                      const labaKotor = item.subtotal - hppTotal
+                      return (
+                        <tr key={item.id} className="hover:bg-white/[0.02]">
+                          <td className="px-5 py-4">
+                            <p className="font-semibold text-white">{item.nama_produk}</p>
+                            {item.keterangan && <p className="text-xs text-gray-500 mt-1">↳ {item.keterangan}</p>}
+                          </td>
+                          <td className="px-5 py-4 text-center">{item.qty}</td>
+                          <td className="px-5 py-4 text-right">{formatRp(item.harga)}</td>
+                          <td className="px-5 py-4 text-right font-medium text-white">{formatRp(item.subtotal)}</td>
+                          <td className="px-5 py-4 text-right text-red-400">{formatRp(hppTotal)}</td>
+                          <td className={`px-5 py-4 text-right font-semibold ${labaKotor >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatRp(labaKotor)}</td>
+                        </tr>
+                      )
+                    })}
                     {(!selectedTx.transaksi_detail || selectedTx.transaksi_detail.length === 0) && (
-                      <tr><td colSpan={4} className="px-5 py-8 text-center text-gray-500 italic">Tidak ada detail produk.</td></tr>
+                      <tr><td colSpan={6} className="px-5 py-8 text-center text-gray-500 italic">Tidak ada detail produk.</td></tr>
                     )}
                   </tbody>
-                  <tfoot className="border-t border-white/10 bg-[#161b22]">
-                    <tr>
-                      <td colSpan={3} className="px-5 py-4 text-right font-bold text-gray-400 uppercase">Total Akhir:</td>
-                      <td className="px-5 py-4 text-right font-bold text-green-400 text-lg">{formatRp(selectedTx.total)}</td>
-                    </tr>
+                  <tfoot className="border-t border-white/10 bg-[#161b22] text-sm">
+                    {(() => {
+                      const details = selectedTx.transaksi_detail || []
+                      const totalHpp = details.reduce((acc, item) => acc + item.qty * (hppMap[item.nama_produk] ?? 0), 0)
+                      const totalLaba = selectedTx.total - totalHpp
+                      const margin = selectedTx.total > 0 ? (totalLaba / selectedTx.total) * 100 : 0
+                      return (
+                        <>
+                          <tr className="border-t border-white/5">
+                            <td colSpan={3} className="px-5 py-3 text-right text-gray-400">Total Omzet:</td>
+                            <td className="px-5 py-3 text-right font-bold text-green-400">{formatRp(selectedTx.total)}</td>
+                            <td colSpan={2}></td>
+                          </tr>
+                          <tr>
+                            <td colSpan={3} className="px-5 py-3 text-right text-gray-400">Total HPP:</td>
+                            <td></td>
+                            <td className="px-5 py-3 text-right font-bold text-red-400">{formatRp(totalHpp)}</td>
+                            <td></td>
+                          </tr>
+                          <tr className="border-t border-white/5">
+                            <td colSpan={3} className="px-5 py-3 text-right text-gray-400">Laba Kotor:</td>
+                            <td></td>
+                            <td></td>
+                            <td className={`px-5 py-3 text-right font-bold text-lg ${totalLaba >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatRp(totalLaba)}</td>
+                          </tr>
+                          <tr>
+                            <td colSpan={5} className="px-5 py-3 text-right text-gray-500 text-xs">Margin:</td>
+                            <td className={`px-5 py-3 text-right font-semibold text-sm ${margin >= 0 ? 'text-blue-400' : 'text-red-400'}`}>{margin.toFixed(1)}%</td>
+                          </tr>
+                        </>
+                      )
+                    })()}
                   </tfoot>
                 </table>
               </div>

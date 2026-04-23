@@ -20,6 +20,11 @@ type StokItem = {
   stok_awal: number; total_masuk: number; total_keluar: number; koreksi_opname: number; stok_akhir: number
 }
 type HppRow = { produk_id: string; hpp_satuan: string; qty: string; catatan: string }
+type DetailKeluar = {
+  id: number; transaksi_id: number; nama_produk: string; qty: number
+  transaksi: { tanggal: string; no_nota: string; nama_pembeli: string } | null
+}
+type DetailData = { masuk: HPP[]; keluar: DetailKeluar[]; opname: Opname[] }
 
 export default function StokAyamPage() {
   const [activeTab, setActiveTab] = useState<'stok' | 'hpp' | 'opname'>('stok')
@@ -30,8 +35,9 @@ export default function StokAyamPage() {
   const [opnameList, setOpnameList] = useState<Opname[]>([])
   const [transaksiDetail, setTransaksiDetail] = useState<{ nama_produk: string; qty: number }[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [stokSearch, setStokSearch] = useState("")
 
-  // HPP Form multi-produk
+  // HPP Form
   const [hppTanggal, setHppTanggal] = useState(new Date().toISOString().split('T')[0])
   const [hppSupplierId, setHppSupplierId] = useState("")
   const [hppTipeBayar, setHppTipeBayar] = useState("Tunai")
@@ -46,6 +52,11 @@ export default function StokAyamPage() {
   // Opname
   const [opnameForm, setOpnameForm] = useState({ tanggal: new Date().toISOString().split('T')[0], produk_id: "", qty_aktual: "", catatan: "" })
   const [isOpnameSubmitting, setIsOpnameSubmitting] = useState(false)
+
+  // Detail modal
+  const [detailProduk, setDetailProduk] = useState<StokItem | null>(null)
+  const [detailData, setDetailData] = useState<DetailData | null>(null)
+  const [isDetailLoading, setIsDetailLoading] = useState(false)
 
   const formatRp = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n)
   const formatDate = (d: string) => new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
@@ -87,7 +98,37 @@ export default function StokAyamPage() {
     })
   }, [produkList, stokAwalList, hppList, transaksiDetail, opnameList])
 
+  // Latest HPP per produk (hppList is sorted DESC by tanggal)
+  const hppLatestPerProduk = useMemo(() => {
+    const map: Record<string, number> = {}
+    hppList.forEach(h => { if (!map[h.nama_produk]) map[h.nama_produk] = h.hpp_satuan })
+    return map
+  }, [hppList])
+
+  const totalNilaiStok = useMemo(() =>
+    stokData.reduce((acc, item) => acc + Math.max(0, item.stok_akhir) * (hppLatestPerProduk[item.nama_produk] || 0), 0)
+  , [stokData, hppLatestPerProduk])
+
   const getSistemStok = (produk_id: number) => stokData.find(s => s.produk_id === produk_id)?.stok_akhir || 0
+
+  const openDetailModal = async (item: StokItem) => {
+    setDetailProduk(item)
+    setDetailData(null)
+    setIsDetailLoading(true)
+    try {
+      const [masukRes, keluarRes, opnameRes] = await Promise.all([
+        supabase.from('hpp').select('*').eq('produk_id', item.produk_id).order('tanggal', { ascending: false }),
+        supabase.from('transaksi_detail').select('id, transaksi_id, nama_produk, qty, transaksi!inner(tanggal, no_nota, nama_pembeli)').eq('nama_produk', item.nama_produk).order('transaksi_id', { ascending: false }),
+        supabase.from('opname').select('*').eq('produk_id', item.produk_id).order('tanggal', { ascending: false }),
+      ])
+      setDetailData({
+        masuk: (masukRes.data as HPP[]) || [],
+        keluar: (keluarRes.data as unknown as DetailKeluar[]) || [],
+        opname: (opnameRes.data as Opname[]) || [],
+      })
+    } catch (e) { console.error(e) }
+    finally { setIsDetailLoading(false) }
+  }
 
   const addHppRow = () => setHppRows(prev => [...prev, { produk_id: "", hpp_satuan: "", qty: "", catatan: "" }])
   const removeHppRow = (idx: number) => setHppRows(prev => prev.filter((_, i) => i !== idx))
@@ -116,6 +157,17 @@ export default function StokAyamPage() {
       })
       const { data, error } = await supabase.from('hpp').insert(inserts).select()
       if (error) throw error
+
+      if (hppTipeBayar === 'Tempo') {
+        const utangInserts = (data as HPP[]).map(insertedHpp => ({
+          hpp_id: insertedHpp.id, tanggal: insertedHpp.tanggal,
+          nama_supplier: insertedHpp.nama_supplier, nama_produk: insertedHpp.nama_produk,
+          total: insertedHpp.total_modal, terbayar: 0, sisa: insertedHpp.total_modal, status: 'belum lunas'
+        }))
+        const { error: utangError } = await supabase.from('utang_supplier').insert(utangInserts)
+        if (utangError) throw utangError
+      }
+
       setHppList(prev => [...(data as HPP[]), ...prev])
       setHppRows([{ produk_id: "", hpp_satuan: "", qty: "", catatan: "" }])
       setHppSupplierId(""); setHppTipeBayar("Tunai")
@@ -171,8 +223,20 @@ export default function StokAyamPage() {
       }).select().single()
       if (error) throw error
       setOpnameList(prev => [data as Opname, ...prev])
+
+      if (selisih < 0 && produk) {
+        const { data: hppData } = await supabase.from('hpp').select('hpp_satuan')
+          .eq('nama_produk', produk.nama).order('tanggal', { ascending: false }).limit(1).single()
+        const hpp_terakhir = hppData?.hpp_satuan || 0
+        await supabase.from('pengeluaran').insert({
+          tanggal: opnameForm.tanggal, kategori: 'Penyusutan', sub_kategori: produk.nama,
+          keterangan: `Susut opname: ${Math.abs(selisih)} ${produk.satuan}`,
+          jumlah: Math.abs(selisih) * hpp_terakhir
+        })
+      }
+
       setOpnameForm({ tanggal: new Date().toISOString().split('T')[0], produk_id: "", qty_aktual: "", catatan: "" })
-      alert(`Opname berhasil! Selisih: ${selisih >= 0 ? '+' : ''}${selisih} ${produk?.satuan}`)
+      alert(`Opname berhasil! Selisih: ${selisih >= 0 ? '+' : ''}${selisih} ${produk?.satuan}${selisih < 0 ? '\n⚠️ Penyusutan otomatis dicatat.' : ''}`)
     } catch (e: any) { alert("Gagal: " + e.message) }
     finally { setIsOpnameSubmitting(false) }
   }
@@ -184,7 +248,10 @@ export default function StokAyamPage() {
     setOpnameList(prev => prev.filter(o => o.id !== id))
   }
 
-  const totalStokNilai = useMemo(() => hppList.reduce((acc, h) => acc + h.total_modal, 0), [hppList])
+  const filteredStokData = useMemo(() =>
+    stokSearch ? stokData.filter(item => item.nama_produk.toLowerCase().includes(stokSearch.toLowerCase())) : stokData
+  , [stokData, stokSearch])
+
   const produkMenipis = stokData.filter(s => s.stok_akhir > 0 && s.stok_akhir < 10).length
   const produkHabis = stokData.filter(s => s.stok_akhir <= 0).length
 
@@ -192,7 +259,7 @@ export default function StokAyamPage() {
     <>
       <header className="sticky top-0 z-10 flex items-center justify-between px-8 py-5 bg-[#0d1117]/80 backdrop-blur border-b border-white/[0.05]">
         <div>
-          <h2 className="text-2xl font-bold text-white">Stok Ayam</h2>
+          <h2 className="text-2xl font-bold text-white">Stok</h2>
           <p className="text-sm text-gray-500 mt-0.5">Pantau stok, input pembelian, dan lakukan opname</p>
         </div>
         <div className="flex items-center gap-3">
@@ -202,14 +269,19 @@ export default function StokAyamPage() {
       </header>
 
       <main className="p-8 space-y-6">
-        <div className="grid grid-cols-4 gap-5">
+        <div className="grid grid-cols-5 gap-4">
           <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-5">
             <p className="text-gray-400 text-sm mb-1">Total Produk</p>
             <p className="text-2xl font-bold text-white">{stokData.length} <span className="text-sm text-gray-500 font-normal">produk</span></p>
           </div>
+          <div className="bg-[#161b22] border border-green-500/20 rounded-2xl p-5">
+            <p className="text-gray-400 text-sm mb-1">Total Nilai Stok</p>
+            <p className="text-xl font-bold text-green-400">{formatRp(totalNilaiStok)}</p>
+            <p className="text-xs text-gray-500 mt-1">stok × HPP terakhir</p>
+          </div>
           <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-5">
             <p className="text-gray-400 text-sm mb-1">Modal Pembelian</p>
-            <p className="text-2xl font-bold text-green-400">{formatRp(totalStokNilai)}</p>
+            <p className="text-xl font-bold text-blue-400">{formatRp(hppList.reduce((a, h) => a + h.total_modal, 0))}</p>
           </div>
           <div className="bg-[#161b22] border border-yellow-500/20 rounded-2xl p-5">
             <p className="text-gray-400 text-sm mb-1">Stok Menipis</p>
@@ -232,44 +304,65 @@ export default function StokAyamPage() {
 
         {/* STOK TAB */}
         {activeTab === 'stok' && (
-          <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
-            {isLoading ? (
-              <div className="p-12 text-center text-gray-400 flex flex-col items-center">
-                <div className="w-8 h-8 border-4 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-4"></div>
-                Menghitung stok...
-              </div>
-            ) : (
-              <table className="w-full text-left text-sm text-gray-300">
-                <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
-                  <tr>
-                    <th className="px-6 py-4">Produk</th>
-                    <th className="px-6 py-4 text-right">Stok Awal</th>
-                    <th className="px-6 py-4 text-right">+ Masuk</th>
-                    <th className="px-6 py-4 text-right">- Terjual</th>
-                    <th className="px-6 py-4 text-right">± Opname</th>
-                    <th className="px-8 py-6 text-right">Stok Akhir</th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.02]">
-                  {stokData.map(item => {
-                    const status = item.stok_akhir <= 0 ? 'Habis' : item.stok_akhir < 10 ? 'Menipis' : 'Tersedia'
-                    const statusClass = status === 'Habis' ? 'bg-red-500/10 text-red-400 border-red-500/20' : status === 'Menipis' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'
-                    return (
-                      <tr key={item.produk_id} className="hover:bg-white/[0.01] transition-colors">
-                        <td className="px-6 py-4 font-semibold text-white">{item.nama_produk}</td>
-                        <td className="px-6 py-4 text-right text-gray-400">{item.stok_awal} {item.satuan}</td>
-                        <td className="px-6 py-4 text-right text-green-400">+{item.total_masuk} {item.satuan}</td>
-                        <td className="px-6 py-4 text-right text-red-400">-{item.total_keluar} {item.satuan}</td>
-                        <td className={`px-6 py-4 text-right ${item.koreksi_opname >= 0 ? 'text-blue-400' : 'text-orange-400'}`}>{item.koreksi_opname >= 0 ? '+' : ''}{item.koreksi_opname} {item.satuan}</td>
-                        <td className="px-6 py-4 text-right font-bold text-white text-base">{item.stok_akhir} {item.satuan}</td>
-                        <td className="px-6 py-4 text-center"><span className={`px-3 py-1 text-xs font-semibold rounded-full border ${statusClass}`}>{status}</span></td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            )}
+          <div className="space-y-4">
+            <div className="relative w-full max-w-sm">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">🔍</span>
+              <input type="text" placeholder="Cari nama produk..." value={stokSearch}
+                onChange={e => setStokSearch(e.target.value)}
+                className="w-full bg-[#161b22] border border-white/10 text-white text-sm rounded-xl pl-9 pr-9 py-2.5 focus:outline-none focus:border-green-500/50" />
+              {stokSearch && (
+                <button onClick={() => setStokSearch('')} className="absolute inset-y-0 right-3 flex items-center text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              )}
+            </div>
+            <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
+              {isLoading ? (
+                <div className="p-12 text-center text-gray-400 flex flex-col items-center">
+                  <div className="w-8 h-8 border-4 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-4"></div>
+                  Menghitung stok...
+                </div>
+              ) : (
+                <table className="w-full text-left text-sm text-gray-300">
+                  <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
+                    <tr>
+                      <th className="px-6 py-3">Produk</th>
+                      <th className="px-4 py-3 text-right">Stok Awal</th>
+                      <th className="px-4 py-3 text-right">+ Masuk</th>
+                      <th className="px-4 py-3 text-right">- Terjual</th>
+                      <th className="px-4 py-3 text-right">± Opname</th>
+                      <th className="px-4 py-3 text-right">Stok Akhir</th>
+                      <th className="px-4 py-3 text-right">Nilai Stok</th>
+                      <th className="px-4 py-3 text-center">Status</th>
+                      <th className="px-4 py-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.02]">
+                    {filteredStokData.map(item => {
+                      const status = item.stok_akhir <= 0 ? 'Habis' : item.stok_akhir < 10 ? 'Menipis' : 'Tersedia'
+                      const statusClass = status === 'Habis' ? 'bg-red-500/10 text-red-400 border-red-500/20' : status === 'Menipis' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'
+                      const nilaiStok = Math.max(0, item.stok_akhir) * (hppLatestPerProduk[item.nama_produk] || 0)
+                      return (
+                        <tr key={item.produk_id} className="hover:bg-white/[0.01] transition-colors group">
+                          <td className="px-6 py-4 font-semibold text-white">{item.nama_produk}</td>
+                          <td className="px-4 py-4 text-right text-gray-400">{item.stok_awal} {item.satuan}</td>
+                          <td className="px-4 py-4 text-right text-green-400">+{item.total_masuk} {item.satuan}</td>
+                          <td className="px-4 py-4 text-right text-red-400">-{item.total_keluar} {item.satuan}</td>
+                          <td className={`px-4 py-4 text-right ${item.koreksi_opname >= 0 ? 'text-blue-400' : 'text-orange-400'}`}>{item.koreksi_opname >= 0 ? '+' : ''}{item.koreksi_opname} {item.satuan}</td>
+                          <td className="px-4 py-4 text-right font-bold text-white">{item.stok_akhir} {item.satuan}</td>
+                          <td className="px-4 py-4 text-right font-semibold text-green-400 text-xs">{nilaiStok > 0 ? formatRp(nilaiStok) : '-'}</td>
+                          <td className="px-4 py-4 text-center"><span className={`px-3 py-1 text-xs font-semibold rounded-full border ${statusClass}`}>{status}</span></td>
+                          <td className="px-4 py-4 text-center">
+                            <button onClick={() => openDetailModal(item)}
+                              className="opacity-0 group-hover:opacity-100 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium border border-white/10 transition-all">
+                              Detail 🔍
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
 
@@ -281,13 +374,13 @@ export default function StokAyamPage() {
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-gray-300 text-sm">Tanggal <span className="text-red-500">*</span></label>
-                  <input type="date" value={hppTanggal} onChange={e => setHppTanggal(e.target.value)}
-                    className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                  <input type="date" value={hppTanggal} onChange={e => setHppTanggal(e.target.value)} onClick={e => (e.target as any).showPicker?.()}
+                    className="w-full cursor-pointer bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-gray-300 text-sm">Supplier</label>
                   <select value={hppSupplierId} onChange={e => setHppSupplierId(e.target.value)}
-                    className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500">
+                    className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500">
                     <option value="">Pilih supplier...</option>
                     {supplierList.map(s => <option key={s.id} value={s.id}>{s.nama}</option>)}
                   </select>
@@ -295,21 +388,17 @@ export default function StokAyamPage() {
                 <div className="space-y-1.5">
                   <label className="text-gray-300 text-sm">Tipe Bayar</label>
                   <select value={hppTipeBayar} onChange={e => setHppTipeBayar(e.target.value)}
-                    className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500">
+                    className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500">
                     <option value="Tunai">Tunai</option>
                     <option value="Tempo">Tempo</option>
                   </select>
                 </div>
               </div>
-
               <div className="space-y-3">
                 <div className="grid grid-cols-12 gap-3 text-xs text-gray-400 uppercase px-1">
-                  <div className="col-span-4">Produk</div>
-                  <div className="col-span-2">HPP/satuan (Rp)</div>
-                  <div className="col-span-2">Qty</div>
-                  <div className="col-span-2">Subtotal</div>
-                  <div className="col-span-1">Catatan</div>
-                  <div className="col-span-1"></div>
+                  <div className="col-span-4">Produk</div><div className="col-span-2">HPP/satuan (Rp)</div>
+                  <div className="col-span-2">Qty</div><div className="col-span-2">Subtotal</div>
+                  <div className="col-span-1">Catatan</div><div className="col-span-1"></div>
                 </div>
                 {hppRows.map((row, idx) => {
                   const produk = produkList.find(p => p.id === parseInt(row.produk_id))
@@ -318,25 +407,25 @@ export default function StokAyamPage() {
                     <div key={idx} className="grid grid-cols-12 gap-3 items-center bg-[#0d1117] p-3 rounded-xl border border-white/5">
                       <div className="col-span-4">
                         <select value={row.produk_id} onChange={e => updateHppRow(idx, 'produk_id', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500">
+                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500">
                           <option value="">Pilih produk...</option>
                           {produkList.map(p => <option key={p.id} value={p.id}>{p.nama} ({p.satuan})</option>)}
                         </select>
                       </div>
                       <div className="col-span-2">
                         <input type="number" min="0" value={row.hpp_satuan} onChange={e => updateHppRow(idx, 'hpp_satuan', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" placeholder="" />
+                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500" />
                       </div>
                       <div className="col-span-2">
                         <input type="number" min="0" step="1" value={row.qty} onChange={e => updateHppRow(idx, 'qty', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" placeholder={produk?.satuan || "0"} />
+                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500" placeholder={produk?.satuan || "0"} />
                       </div>
                       <div className="col-span-2">
                         <p className="text-green-400 font-semibold text-sm px-1">{subtotal > 0 ? formatRp(subtotal) : '-'}</p>
                       </div>
                       <div className="col-span-1">
                         <input type="text" value={row.catatan} onChange={e => updateHppRow(idx, 'catatan', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" placeholder="..." />
+                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500" placeholder="..." />
                       </div>
                       <div className="col-span-1 flex justify-center">
                         {hppRows.length > 1 && (
@@ -347,7 +436,6 @@ export default function StokAyamPage() {
                   )
                 })}
               </div>
-
               <div className="flex items-center justify-between pt-2">
                 <button onClick={addHppRow} className="flex items-center gap-2 text-green-400 hover:text-green-300 text-sm font-medium transition-colors">
                   <span className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center text-base">+</span> Tambah Produk
@@ -366,7 +454,6 @@ export default function StokAyamPage() {
                 </div>
               </div>
             </div>
-
             <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
               <div className="px-6 py-4 border-b border-white/[0.05]"><h3 className="font-bold text-white">Riwayat Pembelian</h3></div>
               {hppList.length === 0 ? (
@@ -412,13 +499,13 @@ export default function StokAyamPage() {
               <h3 className="font-bold text-white text-lg">Input Opname</h3>
               <div className="space-y-1.5">
                 <label className="text-gray-300 text-sm">Tanggal <span className="text-red-500">*</span></label>
-                <input type="date" value={opnameForm.tanggal} onChange={e => setOpnameForm({ ...opnameForm, tanggal: e.target.value })}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                <input type="date" value={opnameForm.tanggal} onChange={e => setOpnameForm({ ...opnameForm, tanggal: e.target.value })} onClick={e => (e.target as any).showPicker?.()}
+                  className="w-full cursor-pointer bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500 [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-gray-300 text-sm">Produk <span className="text-red-500">*</span></label>
                 <select value={opnameForm.produk_id} onChange={e => setOpnameForm({ ...opnameForm, produk_id: e.target.value })}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500">
+                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500">
                   <option value="">Pilih produk...</option>
                   {produkList.map(p => <option key={p.id} value={p.id}>{p.nama} ({p.satuan})</option>)}
                 </select>
@@ -430,7 +517,7 @@ export default function StokAyamPage() {
                 </div>
               )}
               <div className="space-y-1.5">
-                <label className="text-gray-300 text-sm">Stok Aktual (hasil timbang) <span className="text-red-500">*</span></label>
+                <label className="text-gray-300 text-sm">Stok Aktual <span className="text-red-500">*</span></label>
                 <input type="number" min="0" step="1" value={opnameForm.qty_aktual}
                   onChange={e => setOpnameForm({ ...opnameForm, qty_aktual: e.target.value })}
                   className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500" placeholder="0" />
@@ -453,7 +540,6 @@ export default function StokAyamPage() {
                 {isOpnameSubmitting ? "Menyimpan..." : "📋 Simpan Opname"}
               </button>
             </div>
-
             <div className="col-span-3 bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
               <div className="px-6 py-4 border-b border-white/[0.05]"><h3 className="font-bold text-white">Riwayat Opname</h3></div>
               {opnameList.length === 0 ? (
@@ -491,6 +577,7 @@ export default function StokAyamPage() {
         )}
       </main>
 
+      {/* Set Stok Awal Modal */}
       {showStokAwalModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-md shadow-2xl">
@@ -522,6 +609,155 @@ export default function StokAyamPage() {
               <button onClick={handleStokAwalSubmit} disabled={isStokAwalSubmitting}
                 className="flex-1 py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white rounded-xl font-semibold">
                 {isStokAwalSubmitting ? "Menyimpan..." : "Simpan"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Detail Stok Modal */}
+      {detailProduk && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between p-6 border-b border-white/5">
+              <div>
+                <h3 className="text-lg font-bold text-white">📊 Riwayat Pergerakan Stok</h3>
+                <p className="text-green-400 font-semibold mt-0.5">{detailProduk.nama_produk}</p>
+              </div>
+              <button onClick={() => { setDetailProduk(null); setDetailData(null) }}
+                className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400">✕</button>
+            </div>
+
+            {/* Summary bar */}
+            <div className="grid grid-cols-3 gap-4 px-6 py-4 bg-[#0d1117]/50 border-b border-white/5">
+              <div className="text-center">
+                <p className="text-xs text-gray-500">Total Masuk</p>
+                <p className="text-lg font-bold text-green-400">+{detailProduk.total_masuk} {detailProduk.satuan}</p>
+              </div>
+              <div className="text-center border-x border-white/5">
+                <p className="text-xs text-gray-500">Total Keluar</p>
+                <p className="text-lg font-bold text-red-400">-{detailProduk.total_keluar} {detailProduk.satuan}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-500">Stok Akhir</p>
+                <p className="text-lg font-bold text-white">{detailProduk.stok_akhir} {detailProduk.satuan}</p>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-6 space-y-6">
+              {isDetailLoading ? (
+                <div className="py-12 flex flex-col items-center text-gray-400">
+                  <div className="w-8 h-8 border-4 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-3"></div>
+                  Memuat riwayat...
+                </div>
+              ) : detailData && (
+                <>
+                  {/* Barang Masuk */}
+                  <div>
+                    <h4 className="text-sm font-bold text-green-400 mb-3 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-green-400"></span> 📥 Barang Masuk ({detailData.masuk.length})
+                    </h4>
+                    {detailData.masuk.length === 0 ? (
+                      <p className="text-gray-500 text-sm italic px-2">Belum ada data masuk</p>
+                    ) : (
+                      <table className="w-full text-sm text-gray-300">
+                        <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
+                          <tr>
+                            <th className="px-4 py-2 text-left">Tanggal</th>
+                            <th className="px-4 py-2 text-left">Supplier</th>
+                            <th className="px-4 py-2 text-right">Qty</th>
+                            <th className="px-4 py-2 text-right">HPP/sat</th>
+                            <th className="px-4 py-2 text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/[0.02]">
+                          {detailData.masuk.map(h => (
+                            <tr key={h.id} className="hover:bg-white/[0.01]">
+                              <td className="px-4 py-2.5 text-gray-400">{formatDate(h.tanggal)}</td>
+                              <td className="px-4 py-2.5">{h.nama_supplier || "-"}</td>
+                              <td className="px-4 py-2.5 text-right text-green-400 font-semibold">+{h.qty} {h.satuan}</td>
+                              <td className="px-4 py-2.5 text-right">{formatRp(h.hpp_satuan)}</td>
+                              <td className="px-4 py-2.5 text-right font-semibold text-green-400">{formatRp(h.total_modal)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Barang Keluar */}
+                  <div>
+                    <h4 className="text-sm font-bold text-red-400 mb-3 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-red-400"></span> 📤 Barang Keluar (Terjual) ({detailData.keluar.length})
+                    </h4>
+                    {detailData.keluar.length === 0 ? (
+                      <p className="text-gray-500 text-sm italic px-2">Belum ada penjualan</p>
+                    ) : (
+                      <table className="w-full text-sm text-gray-300">
+                        <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
+                          <tr>
+                            <th className="px-4 py-2 text-left">Tanggal</th>
+                            <th className="px-4 py-2 text-left">No Nota</th>
+                            <th className="px-4 py-2 text-left">Pembeli</th>
+                            <th className="px-4 py-2 text-right">Qty</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/[0.02]">
+                          {detailData.keluar.map(k => (
+                            <tr key={k.id} className="hover:bg-white/[0.01]">
+                              <td className="px-4 py-2.5 text-gray-400">{k.transaksi ? formatDate(k.transaksi.tanggal) : '-'}</td>
+                              <td className="px-4 py-2.5 font-mono text-xs text-gray-300">{k.transaksi?.no_nota || '-'}</td>
+                              <td className="px-4 py-2.5">{k.transaksi?.nama_pembeli || '-'}</td>
+                              <td className="px-4 py-2.5 text-right text-red-400 font-semibold">-{k.qty} {detailProduk.satuan}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Opname */}
+                  <div>
+                    <h4 className="text-sm font-bold text-blue-400 mb-3 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-400"></span> 📋 Opname ({detailData.opname.length})
+                    </h4>
+                    {detailData.opname.length === 0 ? (
+                      <p className="text-gray-500 text-sm italic px-2">Belum ada data opname</p>
+                    ) : (
+                      <table className="w-full text-sm text-gray-300">
+                        <thead className="text-xs text-gray-400 uppercase bg-[#0d1117]/80 border-b border-white/[0.05]">
+                          <tr>
+                            <th className="px-4 py-2 text-left">Tanggal</th>
+                            <th className="px-4 py-2 text-right">Stok Sistem</th>
+                            <th className="px-4 py-2 text-right">Stok Aktual</th>
+                            <th className="px-4 py-2 text-right">Selisih</th>
+                            <th className="px-4 py-2 text-left">Catatan</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/[0.02]">
+                          {detailData.opname.map(o => (
+                            <tr key={o.id} className="hover:bg-white/[0.01]">
+                              <td className="px-4 py-2.5 text-gray-400">{formatDate(o.tanggal)}</td>
+                              <td className="px-4 py-2.5 text-right">{o.qty_sistem} {o.satuan}</td>
+                              <td className="px-4 py-2.5 text-right">{o.qty_aktual} {o.satuan}</td>
+                              <td className={`px-4 py-2.5 text-right font-semibold ${o.selisih >= 0 ? 'text-blue-400' : 'text-orange-400'}`}>
+                                {o.selisih >= 0 ? '+' : ''}{o.selisih} {o.satuan}
+                              </td>
+                              <td className="px-4 py-2.5 text-gray-500 text-xs">{o.catatan || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-white/5">
+              <button onClick={() => { setDetailProduk(null); setDetailData(null) }}
+                className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium transition-colors">
+                Tutup
               </button>
             </div>
           </div>
