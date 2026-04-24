@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { getUserRole } from "@/utils/supabase/getUserRole"
 
 type TransaksiDetail = {
   id: number
@@ -33,6 +34,18 @@ export default function TransaksiPage() {
   const [transactions, setTransactions] = useState<Transaksi[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
+  // Role
+  const [role, setRole] = useState<'admin' | 'kasir' | null>(null)
+
+  // Edit Modal State
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editTx, setEditTx] = useState<Transaksi | null>(null)
+  const [editNamaPembeli, setEditNamaPembeli] = useState("")
+  const [editTanggal, setEditTanggal] = useState("")
+  const [editNoNota, setEditNoNota] = useState("")
+  const [editDetail, setEditDetail] = useState<TransaksiDetail[]>([])
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false)
+
   // Filter mode: 'harian' | 'bulanan'
   const [filterMode, setFilterMode] = useState<'harian' | 'bulanan'>('harian')
 
@@ -53,6 +66,39 @@ export default function TransaksiPage() {
   const [hppMap, setHppMap] = useState<Record<string, number>>({})
   const [isHppLoading, setIsHppLoading] = useState(false)
 
+  const detailModalRef = useRef<HTMLDivElement>(null)
+  const editModalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (selectedTx) setTimeout(() => detailModalRef.current?.focus(), 100)
+  }, [selectedTx])
+
+  useEffect(() => {
+    if (showEditModal) setTimeout(() => editModalRef.current?.focus(), 100)
+  }, [showEditModal])
+
+  const handleEditModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      const inputs = Array.from(e.currentTarget.querySelectorAll('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')) as HTMLElement[]
+      const activeEl = document.activeElement as HTMLElement
+      const activeIndex = inputs.indexOf(activeEl)
+      
+      if (activeIndex > -1 && activeIndex < inputs.length - 1) {
+        inputs[activeIndex + 1].focus()
+      } else {
+        handleSimpanEdit()
+      }
+    }
+  }
+
+  const handleDetailModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      setSelectedTx(null)
+    }
+  }
+
   useEffect(() => {
     const now = new Date()
     const tzOffset = now.getTimezoneOffset() * 60000
@@ -60,7 +106,14 @@ export default function TransaksiPage() {
     setDateFilter(todayLocal)
   }, [])
 
-  useEffect(() => { fetchTransactions() }, [])
+  useEffect(() => {
+    async function fetchRole() {
+      const r = await getUserRole()
+      setRole(r)
+    }
+    fetchRole()
+    fetchTransactions()
+  }, [])
 
   useEffect(() => {
     if (!selectedTx) { setHppMap({}); return }
@@ -90,6 +143,86 @@ export default function TransaksiPage() {
       setTransactions(data as Transaksi[])
     } catch (err) { console.error(err) }
     finally { setIsLoading(false) }
+  }
+
+  const handleHapusTransaksi = async (tx: Transaksi) => {
+    if (confirm(`Yakin hapus transaksi ${tx.no_nota} atas nama ${tx.nama_pembeli}? Tindakan ini tidak bisa dibatalkan.`)) {
+      try {
+        await supabase.from('transaksi_detail').delete().eq('transaksi_id', tx.id)
+        await supabase.from('pengiriman').delete().eq('transaksi_id', tx.id)
+        await supabase.from('piutang').delete().eq('no_nota', tx.no_nota)
+        await supabase.from('transaksi').delete().eq('id', tx.id)
+        alert("Transaksi berhasil dihapus.")
+        fetchTransactions()
+      } catch (err: any) {
+        alert("Gagal hapus transaksi: " + err.message)
+      }
+    }
+  }
+
+  const handleBukaEdit = (tx: Transaksi) => {
+    setEditTx(tx)
+    setEditNamaPembeli(tx.nama_pembeli)
+    setEditTanggal(tx.tanggal.split('T')[0])
+    setEditNoNota(tx.no_nota)
+    setEditDetail(tx.transaksi_detail ? [...tx.transaksi_detail] : [])
+    setShowEditModal(true)
+  }
+
+  const handleSimpanEdit = async () => {
+    if (!editTx) return
+    setIsEditSubmitting(true)
+    try {
+      const total = editDetail.reduce((a, d) => a + (d.qty * d.harga), 0)
+      
+      // Update transaksi
+      await supabase.from('transaksi').update({
+        no_nota: editNoNota,
+        nama_pembeli: editNamaPembeli,
+        tanggal: new Date(editTanggal).toISOString(),
+        total
+      }).eq('id', editTx.id)
+
+      // Hapus detail lama, insert detail baru
+      await supabase.from('transaksi_detail').delete().eq('transaksi_id', editTx.id)
+      if (editDetail.length > 0) {
+        await supabase.from('transaksi_detail').insert(
+          editDetail.map(d => ({
+            transaksi_id: editTx.id,
+            nama_produk: d.nama_produk,
+            qty: d.qty,
+            harga: d.harga,
+            subtotal: d.qty * d.harga,
+            keterangan: d.keterangan || null
+          }))
+        )
+      }
+
+      // Update piutang jika ada (update total & sisa)
+      const { data: piutangData } = await supabase
+        .from('piutang')
+        .select('*')
+        .eq('no_nota', editTx.no_nota)
+        .eq('status', 'belum lunas')
+        .single()
+      
+      if (piutangData) {
+        await supabase.from('piutang').update({
+          no_nota: editNoNota,
+          nama_pembeli: editNamaPembeli,
+          total,
+          sisa: total - (piutangData.terbayar || 0)
+        }).eq('id', piutangData.id)
+      }
+
+      alert("Transaksi berhasil diupdate!")
+      setShowEditModal(false)
+      fetchTransactions()
+    } catch (err: any) {
+      alert("Gagal update: " + err.message)
+    } finally {
+      setIsEditSubmitting(false)
+    }
   }
 
   const formatRp = (num: number) =>
@@ -323,10 +456,24 @@ export default function TransaksiPage() {
                       </td>
                       <td className="px-6 py-4 text-right font-medium text-white">{formatRp(tx.total)}</td>
                       <td className="px-6 py-4 text-center">
-                        <button onClick={() => setSelectedTx(tx)}
-                          className="bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white px-4 py-2 rounded-lg text-xs font-medium transition-all border border-white/5">
-                          Detail 🔍
-                        </button>
+                        <div className="flex justify-center items-center gap-2">
+                          <button onClick={() => setSelectedTx(tx)}
+                            className="bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white px-4 py-2 rounded-lg text-xs font-medium transition-all border border-white/5">
+                            Detail 🔍
+                          </button>
+                          {role === 'admin' && (
+                            <>
+                              <button onClick={() => handleBukaEdit(tx)}
+                                className="bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-500 hover:text-yellow-400 px-3 py-2 rounded-lg text-xs font-medium transition-all border border-yellow-500/20">
+                                ✏️ Edit
+                              </button>
+                              <button onClick={() => handleHapusTransaksi(tx)}
+                                className="bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 px-3 py-2 rounded-lg text-xs font-medium transition-all border border-red-500/20">
+                                🗑️ Hapus
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -348,7 +495,7 @@ export default function TransaksiPage() {
 
       {/* DETAIL MODAL */}
       {selectedTx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div ref={detailModalRef} tabIndex={-1} onKeyDown={handleDetailModalKeyDown} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm outline-none">
           <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-6 border-b border-white/5 bg-black/20">
               <div>
@@ -471,6 +618,144 @@ export default function TransaksiPage() {
               <button onClick={() => setSelectedTx(null)}
                 className="px-6 py-2.5 bg-gray-600/20 hover:bg-gray-600/40 text-white rounded-xl font-medium border border-white/10">
                 Tutup Detail
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT MODAL */}
+      {showEditModal && editTx && (
+        <div ref={editModalRef} tabIndex={-1} onKeyDown={handleEditModalKeyDown} className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm outline-none">
+          <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-white/5 bg-black/20">
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                <span className="text-yellow-500">✏️</span> Edit Transaksi
+              </h3>
+              <button onClick={() => setShowEditModal(false)}
+                className="w-10 h-10 rounded-full bg-white/5 hover:bg-red-500/10 hover:text-red-400 flex items-center justify-center text-gray-400 transition-colors">
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 space-y-6">
+              <div className="grid grid-cols-3 gap-5">
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">No Nota</label>
+                  <input type="text" value={editNoNota} onChange={e => setEditNoNota(e.target.value)}
+                    className="w-full h-10 bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 focus:border-green-500/50 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">Nama Pembeli</label>
+                  <input type="text" value={editNamaPembeli} onChange={e => setEditNamaPembeli(e.target.value)}
+                    className="w-full h-10 bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 focus:border-green-500/50 focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-400 mb-2">Tanggal</label>
+                  <input type="date" value={editTanggal} onChange={e => setEditTanggal(e.target.value)}
+                    className="w-full h-10 bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 focus:border-green-500/50 focus:outline-none [&::-webkit-calendar-picker-indicator]:filter [&::-webkit-calendar-picker-indicator]:invert" />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="text-sm font-bold text-gray-300 uppercase tracking-widest flex items-center gap-2">
+                    <span className="w-4 h-0.5 bg-green-500/50 rounded-full"></span>
+                    Daftar Produk
+                  </h4>
+                  <button onClick={() => setEditDetail([...editDetail, { id: Date.now(), transaksi_id: editTx.id, nama_produk: '', qty: 1, harga: 0, subtotal: 0, keterangan: '' }])}
+                    className="bg-green-600/20 hover:bg-green-600/30 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium border border-green-500/20 transition-colors">
+                    + Tambah Baris
+                  </button>
+                </div>
+                <div className="bg-[#0d1117] border border-white/5 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-sm text-gray-300">
+                    <thead className="bg-[#161b22] border-b border-white/5 text-xs text-gray-400 uppercase">
+                      <tr>
+                        <th className="px-4 py-3">Nama Produk</th>
+                        <th className="px-4 py-3 w-24 text-center">Qty</th>
+                        <th className="px-4 py-3 w-32 text-right">Harga</th>
+                        <th className="px-4 py-3 w-32 text-right">Subtotal</th>
+                        <th className="px-4 py-3 w-16 text-center">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.02]">
+                      {editDetail.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-white/[0.02]">
+                          <td className="px-4 py-3">
+                            <input type="text" value={item.nama_produk}
+                              onChange={e => {
+                                const newD = [...editDetail]
+                                newD[idx].nama_produk = e.target.value
+                                setEditDetail(newD)
+                              }}
+                              className="w-full bg-transparent border-none text-white focus:ring-0 focus:outline-none placeholder-gray-600 p-0" placeholder="Nama Produk" />
+                            <input type="text" value={item.keterangan || ''}
+                              onChange={e => {
+                                const newD = [...editDetail]
+                                newD[idx].keterangan = e.target.value
+                                setEditDetail(newD)
+                              }}
+                              className="w-full mt-1 bg-transparent border-none text-xs text-gray-500 focus:ring-0 focus:outline-none placeholder-gray-700 p-0" placeholder="Keterangan (opsional)" />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input type="number" min="1" value={item.qty || ''}
+                              onChange={e => {
+                                const newD = [...editDetail]
+                                const val = parseInt(e.target.value) || 0
+                                newD[idx].qty = val
+                                newD[idx].subtotal = val * newD[idx].harga
+                                setEditDetail(newD)
+                              }}
+                              className="w-full bg-transparent border-none text-white focus:ring-0 focus:outline-none text-center p-0" />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input type="number" min="0" value={item.harga || ''}
+                              onChange={e => {
+                                const newD = [...editDetail]
+                                const val = parseInt(e.target.value) || 0
+                                newD[idx].harga = val
+                                newD[idx].subtotal = newD[idx].qty * val
+                                setEditDetail(newD)
+                              }}
+                              className="w-full bg-transparent border-none text-white focus:ring-0 focus:outline-none text-right p-0" />
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-white">{formatRp(item.subtotal)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <button onClick={() => {
+                              const newD = [...editDetail]
+                              newD.splice(idx, 1)
+                              setEditDetail(newD)
+                            }} className="text-red-500 hover:text-red-400 p-1 bg-red-500/10 hover:bg-red-500/20 rounded-lg">✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                      {editDetail.length === 0 && (
+                        <tr><td colSpan={5} className="px-4 py-6 text-center text-gray-500">Tidak ada produk.</td></tr>
+                      )}
+                    </tbody>
+                    <tfoot className="border-t border-white/10 bg-[#161b22]">
+                      <tr>
+                        <td colSpan={3} className="px-4 py-3 text-right font-medium text-gray-400">Total:</td>
+                        <td className="px-4 py-3 text-right font-bold text-green-400 text-base">
+                          {formatRp(editDetail.reduce((a, d) => a + (d.subtotal), 0))}
+                        </td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-white/5 flex justify-end gap-3 bg-black/30 rounded-b-2xl">
+              <button onClick={() => setShowEditModal(false)}
+                className="px-6 py-2.5 bg-gray-600/20 hover:bg-gray-600/40 text-white rounded-xl font-medium border border-white/10 transition-colors">
+                Batal
+              </button>
+              <button onClick={handleSimpanEdit} disabled={isEditSubmitting}
+                className="px-6 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-xl font-medium shadow-lg shadow-green-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                {isEditSubmitting ? "Menyimpan..." : "Simpan Perubahan"}
               </button>
             </div>
           </div>

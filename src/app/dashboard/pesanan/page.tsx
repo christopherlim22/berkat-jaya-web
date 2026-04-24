@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { supabase } from "@/utils/supabase/client"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -34,6 +34,38 @@ export default function PesananPengirimanPage() {
   // Modal Proses
   const [showProsesModal, setShowProsesModal] = useState(false)
   const [selectedPesanan, setSelectedPesanan] = useState<any>(null)
+
+  // Edit Pengiriman State
+  const [showEditPengirimanModal, setShowEditPengirimanModal] = useState(false)
+  const [editPengiriman, setEditPengiriman] = useState<any>(null)
+  const [editItems, setEditItems] = useState<any[]>([])
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false)
+
+  const addModalRef = useRef<HTMLDivElement>(null)
+  const editModalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (showAddModal) setTimeout(() => addModalRef.current?.focus(), 100)
+  }, [showAddModal])
+
+  useEffect(() => {
+    if (showEditPengirimanModal) setTimeout(() => editModalRef.current?.focus(), 100)
+  }, [showEditPengirimanModal])
+
+  const handleModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, saveFn: () => void) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      const inputs = Array.from(e.currentTarget.querySelectorAll('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')) as HTMLElement[]
+      const activeEl = document.activeElement as HTMLElement
+      const activeIndex = inputs.indexOf(activeEl)
+      
+      if (activeIndex > -1 && activeIndex < inputs.length - 1) {
+        inputs[activeIndex + 1].focus()
+      } else {
+        saveFn()
+      }
+    }
+  }
 
   useEffect(() => {
     fetchMasterData()
@@ -267,6 +299,107 @@ export default function PesananPengirimanPage() {
     fetchPengiriman()
   }
 
+  // --- Edit Pengiriman ---
+  const bukaEditPengiriman = async (p: any) => {
+    const { data: details } = await supabase
+      .from('transaksi_detail')
+      .select('*')
+      .eq('transaksi_id', p.transaksi_id)
+
+    setEditPengiriman(p)
+    setEditItems(details || [])
+    setShowEditPengirimanModal(true)
+  }
+
+  const updateEditItem = (idx: number, field: string, val: any) => {
+    const updated = [...editItems]
+    updated[idx][field] = val
+    if (field === 'qty' || field === 'harga') {
+        updated[idx].subtotal = (parseFloat(updated[idx].qty) || 0) * (parseFloat(updated[idx].harga) || 0)
+    }
+    setEditItems(updated)
+  }
+
+  const tambahEditItem = () => {
+    setEditItems([...editItems, {
+      nama_produk: '',
+      qty: 1,
+      harga: 0,
+      subtotal: 0,
+      keterangan: ''
+    }])
+  }
+
+  const hapusEditItem = (idx: number) => {
+    setEditItems(editItems.filter((_, i) => i !== idx))
+  }
+
+  const editTotal = editItems.reduce((a, d) => a + ((parseFloat(d.qty) || 0) * (parseFloat(d.harga) || 0)), 0)
+
+  const handleSimpanEditPengiriman = async () => {
+    if (editItems.length === 0) return alert("Minimal 1 item produk")
+    const invalidItem = editItems.find(d => !d.nama_produk || parseFloat(d.qty) <= 0)
+    if (invalidItem) return alert("Lengkapi semua item produk")
+
+    setIsEditSubmitting(true)
+    try {
+      const total = editTotal
+
+      // 1. Update total di transaksi
+      await supabase
+        .from('transaksi')
+        .update({ total })
+        .eq('id', editPengiriman.transaksi_id)
+
+      // 2. Hapus detail lama, insert detail baru
+      await supabase
+        .from('transaksi_detail')
+        .delete()
+        .eq('transaksi_id', editPengiriman.transaksi_id)
+
+      await supabase
+        .from('transaksi_detail')
+        .insert(editItems.map(d => ({
+          transaksi_id: editPengiriman.transaksi_id,
+          nama_produk: d.nama_produk,
+          qty: parseFloat(d.qty) || 0,
+          harga: parseFloat(d.harga) || 0,
+          subtotal: (parseFloat(d.qty) || 0) * (parseFloat(d.harga) || 0),
+          keterangan: d.keterangan || null
+        })))
+
+      // 3. Cek & update piutang terkait jika ada
+      const noNota = editPengiriman.transaksi?.no_nota
+      if (noNota) {
+        const { data: piutangData } = await supabase
+          .from('piutang')
+          .select('*')
+          .eq('no_nota', noNota)
+          .eq('status', 'belum lunas')
+          .single()
+
+        if (piutangData) {
+          const terbayar = piutangData.terbayar || 0
+          await supabase
+            .from('piutang')
+            .update({
+              total,
+              sisa: total - terbayar
+            })
+            .eq('id', piutangData.id)
+        }
+      }
+
+      alert("Pesanan berhasil diperbarui!")
+      setShowEditPengirimanModal(false)
+      fetchPengiriman()
+    } catch (err: any) {
+      alert("Gagal update: " + err.message)
+    } finally {
+      setIsEditSubmitting(false)
+    }
+  }
+
   // Banner Check
   const now = new Date()
   const tzOffset = now.getTimezoneOffset() * 60000
@@ -421,15 +554,25 @@ export default function PesananPengirimanPage() {
                 const isNotaLocal = up.status ? up.status === 'nota_kembali' : p.status === 'nota_kembali'
                 
                 return (
-                  <div key={p.id} className="bg-[#161b22] border border-white/[0.06] rounded-xl p-5 hover:border-white/20 transition-colors space-y-4">
+                  <form key={p.id} onSubmit={(e) => { e.preventDefault(); simpanPembayaranPengiriman(p); }} className="bg-[#161b22] border border-white/[0.06] rounded-xl p-5 hover:border-white/20 transition-colors space-y-4">
                     <div className="flex justify-between items-start">
                       <div>
                         <h4 className="font-bold text-white text-lg">{tx.nama_pembeli}</h4>
                         <p className="text-gray-400 text-sm font-mono mt-0.5">{tx.no_nota} — {new Date(tx.tanggal).toLocaleDateString('id-ID')}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-green-400 font-bold text-xl">{formatRp(tx.total)}</p>
-                        <p className="text-xs text-gray-500 uppercase tracking-widest">{p.status.replace('_', ' ')}</p>
+                      <div className="text-right flex flex-col items-end gap-2">
+                        <div>
+                          <p className="text-green-400 font-bold text-xl">{formatRp(tx.total)}</p>
+                          <p className="text-xs text-gray-500 uppercase tracking-widest">{p.status.replace('_', ' ')}</p>
+                        </div>
+                        {p.status === 'belum_kirim' && (
+                          <button
+                            onClick={() => bukaEditPengiriman(p)}
+                            className="text-xs px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors"
+                          >
+                            ✏️ Edit Pesanan
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -487,14 +630,14 @@ export default function PesananPengirimanPage() {
                           className="bg-[#161b22] border border-white/10 h-8 text-sm text-white w-32 text-right"
                         />
                       </div>
-                      <Button onClick={() => simpanPembayaranPengiriman(p)} className="bg-blue-600 hover:bg-blue-500 text-white text-xs h-8">
+                      <Button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white text-xs h-8">
                         Simpan Perubahan
                       </Button>
                     </div>
                     {p.catatan_bayar && (
                       <p className="text-xs text-orange-400 mt-2">Catatan: {p.catatan_bayar}</p>
                     )}
-                  </div>
+                  </form>
                 )
               })}
             </div>
@@ -504,7 +647,7 @@ export default function PesananPengirimanPage() {
 
       {/* Modal Tambah Pesanan */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div ref={addModalRef} tabIndex={-1} onKeyDown={(e) => handleModalKeyDown(e, handleSimpanPesanan)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 outline-none">
           <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-3xl flex flex-col max-h-[90vh]">
             <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-black/20 rounded-t-2xl">
               <h3 className="text-xl font-bold text-white">Tambah Pesanan Baru</h3>
@@ -614,6 +757,130 @@ export default function PesananPengirimanPage() {
             <div className="px-6 py-5 border-t border-white/5 bg-black/20 rounded-b-2xl flex justify-end gap-3">
               <Button onClick={() => setShowAddModal(false)} variant="outline" className="border-white/10 text-gray-300 hover:bg-white/5 hover:text-white">Batal</Button>
               <Button onClick={handleSimpanPesanan} className="bg-green-600 hover:bg-green-500 text-white">Simpan Pesanan</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Edit Pesanan Pengiriman */}
+      {showEditPengirimanModal && editPengiriman && (
+        <div ref={editModalRef} tabIndex={-1} onKeyDown={(e) => handleModalKeyDown(e, handleSimpanEditPengiriman)} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 outline-none">
+          <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-3xl flex flex-col max-h-[90vh]">
+            
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-black/20 rounded-t-2xl">
+              <div>
+                <h3 className="text-xl font-bold text-white">✏️ Edit Pesanan</h3>
+                <p className="text-sm text-gray-400 mt-0.5">
+                  {editPengiriman.transaksi?.nama_pembeli} — {editPengiriman.transaksi?.no_nota}
+                </p>
+              </div>
+              <button onClick={() => setShowEditPengirimanModal(false)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              
+              {/* Label kolom */}
+              <div className="grid grid-cols-[1fr_100px_130px_100px_24px] gap-2 px-1">
+                <span className="text-xs text-gray-500">Produk</span>
+                <span className="text-xs text-gray-500">Qty</span>
+                <span className="text-xs text-gray-500">Harga (Rp)</span>
+                <span className="text-xs text-gray-500 text-right">Subtotal</span>
+                <span></span>
+              </div>
+
+              {/* Baris item */}
+              {editItems.map((item, idx) => (
+                <div key={idx} className="grid grid-cols-[1fr_100px_130px_100px_24px] gap-2 items-center bg-[#0d1117] p-3 rounded-xl border border-white/5">
+                  
+                  {/* Nama produk */}
+                  <select
+                    value={item.nama_produk}
+                    onChange={e => updateEditItem(idx, 'nama_produk', e.target.value)}
+                    className="bg-[#161b22] border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-green-500/50 w-full"
+                  >
+                    <option value="">Pilih Produk...</option>
+                    {produk.map(p => (
+                      <option key={p.id} value={p.nama}>{p.nama}</option>
+                    ))}
+                  </select>
+
+                  {/* Qty */}
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={item.qty === 0 ? '' : item.qty}
+                    onChange={e => updateEditItem(idx, 'qty', e.target.value)}
+                    placeholder="0"
+                    className="bg-[#161b22] border border-white/10 rounded-lg px-3 py-2 text-sm text-white text-right focus:outline-none focus:border-green-500/50 appearance-none w-full"
+                  />
+
+                  {/* Harga */}
+                  <input
+                    type="number"
+                    min="0"
+                    value={item.harga === 0 ? '' : item.harga}
+                    onChange={e => updateEditItem(idx, 'harga', e.target.value)}
+                    placeholder="0"
+                    className="bg-[#161b22] border border-white/10 rounded-lg px-3 py-2 text-sm text-white text-right focus:outline-none focus:border-green-500/50 appearance-none w-full"
+                  />
+
+                  {/* Subtotal */}
+                  <span className="text-green-400 text-sm font-medium text-right truncate" title={formatRp(item.subtotal || 0)}>
+                    {formatRp(item.subtotal || 0)}
+                  </span>
+
+                  {/* Hapus baris */}
+                  <button
+                    onClick={() => hapusEditItem(idx)}
+                    className="text-red-400 hover:text-red-300 text-lg font-bold text-center"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+
+              {/* Tambah baris */}
+              <button
+                onClick={tambahEditItem}
+                className="w-full py-2.5 border border-dashed border-white/20 rounded-xl text-gray-400 hover:text-white hover:border-white/40 text-sm transition-colors"
+              >
+                + Tambah Baris Produk
+              </button>
+
+              {/* Total */}
+              <div className="flex justify-between items-center pt-3 border-t border-white/10">
+                <span className="text-gray-300 text-lg">Total Pesanan:</span>
+                <span className="text-green-400 text-2xl font-bold">
+                  {formatRp(editTotal)}
+                </span>
+              </div>
+
+              {/* Info piutang */}
+              <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-xl p-3">
+                <p className="text-yellow-400 text-xs">
+                  ⚠️ Jika pesanan ini terkait piutang, total piutang akan otomatis diperbarui mengikuti perubahan ini.
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-5 border-t border-white/5 bg-black/20 rounded-b-2xl flex justify-end gap-3">
+              <button
+                onClick={() => setShowEditPengirimanModal(false)}
+                className="px-5 py-2.5 rounded-xl border border-white/10 text-gray-300 hover:bg-white/5 text-sm"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleSimpanEditPengiriman}
+                disabled={isEditSubmitting}
+                className="px-5 py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold text-sm disabled:opacity-50"
+              >
+                {isEditSubmitting ? "Menyimpan..." : "💾 Simpan Perubahan"}
+              </button>
             </div>
           </div>
         </div>

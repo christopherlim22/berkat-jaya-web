@@ -270,7 +270,7 @@ export default function PengeluaranPage() {
             </div>
 
             {/* Form input / edit */}
-            <div className={`bg-[#161b22] border rounded-2xl p-6 space-y-5 transition-colors ${opexEditId ? 'border-yellow-500/30' : 'border-white/[0.05]'}`}>
+            <form onSubmit={(e) => { e.preventDefault(); handleOpexSubmit(); }} className={`bg-[#161b22] border rounded-2xl p-6 space-y-5 transition-colors ${opexEditId ? 'border-yellow-500/30' : 'border-white/[0.05]'}`}>
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-white text-lg">
                   {opexEditId ? '✏️ Edit Pengeluaran' : 'Tambah Pengeluaran'}
@@ -315,17 +315,17 @@ export default function PengeluaranPage() {
               </div>
               <div className="flex justify-end gap-3">
                 {opexEditId && (
-                  <button onClick={handleCancelOpex}
+                  <button type="button" onClick={handleCancelOpex}
                     className="bg-white/5 hover:bg-white/10 text-gray-300 font-semibold px-6 py-2.5 rounded-xl transition-colors border border-white/10">
                     Batal
                   </button>
                 )}
-                <button onClick={handleOpexSubmit} disabled={isOpexSubmitting}
+                <button type="submit" disabled={isOpexSubmitting}
                   className={`disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-xl transition-colors ${opexEditId ? 'bg-yellow-600 hover:bg-yellow-500' : 'bg-green-600 hover:bg-green-500'}`}>
                   {isOpexSubmitting ? "Menyimpan..." : opexEditId ? "✏️ Update" : "💾 Simpan"}
                 </button>
               </div>
-            </div>
+            </form>
 
             {/* Tabel riwayat */}
             <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
@@ -420,7 +420,7 @@ export default function PengeluaranPage() {
             </div>
 
             {/* Form input / edit aset */}
-            <div className={`bg-[#161b22] border rounded-2xl p-6 space-y-5 transition-colors ${capexEditId ? 'border-yellow-500/30' : 'border-white/[0.05]'}`}>
+            <form onSubmit={(e) => { e.preventDefault(); handleCapexSubmit(); }} className={`bg-[#161b22] border rounded-2xl p-6 space-y-5 transition-colors ${capexEditId ? 'border-yellow-500/30' : 'border-white/[0.05]'}`}>
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-white text-lg">
                   {capexEditId ? '✏️ Edit Aset' : 'Tambah Aset'}
@@ -472,17 +472,17 @@ export default function PengeluaranPage() {
               </div>
               <div className="flex justify-end gap-3">
                 {capexEditId && (
-                  <button onClick={handleCancelCapex}
+                  <button type="button" onClick={handleCancelCapex}
                     className="bg-white/5 hover:bg-white/10 text-gray-300 font-semibold px-6 py-2.5 rounded-xl transition-colors border border-white/10">
                     Batal
                   </button>
                 )}
-                <button onClick={handleCapexSubmit} disabled={isCapexSubmitting}
+                <button type="submit" disabled={isCapexSubmitting}
                   className={`disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-xl transition-colors ${capexEditId ? 'bg-yellow-600 hover:bg-yellow-500' : 'bg-green-600 hover:bg-green-500'}`}>
                   {isCapexSubmitting ? "Menyimpan..." : capexEditId ? "✏️ Update" : "💾 Simpan Aset"}
                 </button>
               </div>
-            </div>
+            </form>
 
             {/* Tabel daftar aset */}
             <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">

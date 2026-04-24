@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { supabase } from "@/utils/supabase/client"
 import { getUserRole } from "@/utils/supabase/getUserRole"
 
@@ -49,6 +49,26 @@ export default function StokAyamPage() {
   const [stokAwalForm, setStokAwalForm] = useState({ produk_id: "", qty: "" })
   const [isStokAwalSubmitting, setIsStokAwalSubmitting] = useState(false)
   const [showStokAwalModal, setShowStokAwalModal] = useState(false)
+  const stokAwalModalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (showStokAwalModal) setTimeout(() => stokAwalModalRef.current?.focus(), 100)
+  }, [showStokAwalModal])
+
+  const handleStokAwalModalKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      const inputs = Array.from(e.currentTarget.querySelectorAll('input:not([disabled]), select:not([disabled]), textarea:not([disabled])')) as HTMLElement[]
+      const activeEl = document.activeElement as HTMLElement
+      const activeIndex = inputs.indexOf(activeEl)
+      
+      if (activeIndex > -1 && activeIndex < inputs.length - 1) {
+        inputs[activeIndex + 1].focus()
+      } else {
+        handleStokAwalSubmit()
+      }
+    }
+  }
 
   // Opname
   const [opnameForm, setOpnameForm] = useState({ tanggal: new Date().toISOString().split('T')[0], produk_id: "", qty_aktual: "", catatan: "" })
@@ -383,7 +403,7 @@ export default function StokAyamPage() {
         {/* HPP TAB */}
         {activeTab === 'hpp' && (
           <div className="space-y-6">
-            <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-6 space-y-5">
+            <form onSubmit={(e) => { e.preventDefault(); handleHppSubmit(); }} className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-6 space-y-5">
               <h3 className="font-bold text-white text-lg">Input Pembelian</h3>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
@@ -443,7 +463,7 @@ export default function StokAyamPage() {
                       </div>
                       <div className="col-span-1 flex justify-center">
                         {hppRows.length > 1 && (
-                          <button onClick={() => removeHppRow(idx)} className="w-7 h-7 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center text-xs font-bold">✕</button>
+                          <button type="button" onClick={() => removeHppRow(idx)} className="w-7 h-7 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center text-xs font-bold">✕</button>
                         )}
                       </div>
                     </div>
@@ -451,7 +471,7 @@ export default function StokAyamPage() {
                 })}
               </div>
               <div className="flex items-center justify-between pt-2">
-                <button onClick={addHppRow} className="flex items-center gap-2 text-green-400 hover:text-green-300 text-sm font-medium transition-colors">
+                <button type="button" onClick={addHppRow} className="flex items-center gap-2 text-green-400 hover:text-green-300 text-sm font-medium transition-colors">
                   <span className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center text-base">+</span> Tambah Produk
                 </button>
                 <div className="flex items-center gap-6">
@@ -461,13 +481,13 @@ export default function StokAyamPage() {
                       <p className="text-xl font-bold text-green-400">{formatRp(hppTotalModal)}</p>
                     </div>
                   )}
-                  <button onClick={handleHppSubmit} disabled={isHppSubmitting}
+                  <button type="submit" disabled={isHppSubmitting}
                     className="bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold px-6 py-3 rounded-xl transition-colors">
                     {isHppSubmitting ? "Menyimpan..." : "💾 Simpan HPP"}
                   </button>
                 </div>
               </div>
-            </div>
+            </form>
             <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
               <div className="px-6 py-4 border-b border-white/[0.05]"><h3 className="font-bold text-white">Riwayat Pembelian</h3></div>
               {hppList.length === 0 ? (
@@ -509,7 +529,7 @@ export default function StokAyamPage() {
         {/* OPNAME TAB */}
         {activeTab === 'opname' && (
           <div className="grid grid-cols-5 gap-6">
-            <div className="col-span-2 bg-[#161b22] border border-white/[0.05] rounded-2xl p-6 space-y-4">
+            <form onSubmit={(e) => { e.preventDefault(); handleOpnameSubmit(); }} className="col-span-2 bg-[#161b22] border border-white/[0.05] rounded-2xl p-6 space-y-4">
               <h3 className="font-bold text-white text-lg">Input Opname</h3>
               <div className="space-y-1.5">
                 <label className="text-gray-300 text-sm">Tanggal <span className="text-red-500">*</span></label>
@@ -549,11 +569,11 @@ export default function StokAyamPage() {
                 <input type="text" value={opnameForm.catatan} onChange={e => setOpnameForm({ ...opnameForm, catatan: e.target.value })}
                   className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500" placeholder="Susut, dll..." />
               </div>
-              <button onClick={handleOpnameSubmit} disabled={isOpnameSubmitting}
+              <button type="submit" disabled={isOpnameSubmitting}
                 className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition-colors">
                 {isOpnameSubmitting ? "Menyimpan..." : "📋 Simpan Opname"}
               </button>
-            </div>
+            </form>
             <div className="col-span-3 bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
               <div className="px-6 py-4 border-b border-white/[0.05]"><h3 className="font-bold text-white">Riwayat Opname</h3></div>
               {opnameList.length === 0 ? (
@@ -593,7 +613,7 @@ export default function StokAyamPage() {
 
       {/* Set Stok Awal Modal */}
       {showStokAwalModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div ref={stokAwalModalRef} tabIndex={-1} onKeyDown={handleStokAwalModalKeyDown} className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm outline-none">
           <div className="bg-[#161b22] border border-white/10 rounded-2xl w-full max-w-md shadow-2xl">
             <div className="flex items-center justify-between p-6 border-b border-white/5">
               <h3 className="text-lg font-bold text-white">⚙️ Set Stok Awal</h3>

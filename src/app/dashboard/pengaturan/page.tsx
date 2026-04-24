@@ -161,32 +161,34 @@ export default function PengaturanPage() {
             <div className="px-6 py-4 border-b border-white/[0.05]">
               <h3 className="text-xl font-bold text-red-400">⚠️ Konfirmasi Reset Data</h3>
             </div>
-            <div className="p-6 space-y-4">
-              <p className="text-gray-300 text-sm">Tindakan ini akan menghapus semua data transaksi secara permanen dan tidak bisa dibatalkan.</p>
-              
-              <div className="space-y-2">
-                <Input 
-                  type="password" 
-                  placeholder="Masukkan password admin" 
-                  value={inputPassword}
-                  onChange={e => setInputPassword(e.target.value)}
-                  className="bg-[#0d1117] border-white/10 text-white"
-                />
-                {modalError && <p className="text-red-400 text-xs mt-1">{modalError}</p>}
+            <form onSubmit={(e) => { e.preventDefault(); handleConfirmReset(); }}>
+              <div className="p-6 space-y-4">
+                <p className="text-gray-300 text-sm">Tindakan ini akan menghapus semua data transaksi secara permanen dan tidak bisa dibatalkan.</p>
+                
+                <div className="space-y-2">
+                  <Input 
+                    type="password" 
+                    placeholder="Masukkan password admin" 
+                    value={inputPassword}
+                    onChange={e => setInputPassword(e.target.value)}
+                    className="bg-[#0d1117] border-white/10 text-white"
+                  />
+                  {modalError && <p className="text-red-400 text-xs mt-1">{modalError}</p>}
+                </div>
               </div>
-            </div>
-            <div className="px-6 py-4 bg-black/20 flex justify-end gap-3 border-t border-white/[0.05]">
-              <Button variant="ghost" onClick={() => setShowModal(false)} disabled={isResetting} className="hover:bg-white/5 text-gray-300">
-                Batal
-              </Button>
-              <Button 
-                onClick={handleConfirmReset} 
-                disabled={!inputPassword || isResetting} 
-                className="bg-red-600 hover:bg-red-500 text-white"
-              >
-                {isResetting ? "Menghapus..." : "Konfirmasi Reset"}
-              </Button>
-            </div>
+              <div className="px-6 py-4 bg-black/20 flex justify-end gap-3 border-t border-white/[0.05]">
+                <Button type="button" variant="ghost" onClick={() => setShowModal(false)} disabled={isResetting} className="hover:bg-white/5 text-gray-300">
+                  Batal
+                </Button>
+                <Button 
+                  type="submit"
+                  disabled={!inputPassword || isResetting} 
+                  className="bg-red-600 hover:bg-red-500 text-white"
+                >
+                  {isResetting ? "Menghapus..." : "Konfirmasi Reset"}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

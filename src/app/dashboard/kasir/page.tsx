@@ -34,6 +34,11 @@ export default function KasirPage() {
   const [cart, setCart] = useState<CartItem[]>([])
   const [namaPembeli, setNamaPembeli] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [errors, setErrors] = useState<{
+    namaPembeli?: string
+    cart?: string
+    items?: Record<number, { qty?: string; harga?: string }>
+  }>({})
 
   const [customers, setCustomers] = useState<string[]>([])
   const [piutangNames, setPiutangNames] = useState<Set<string>>(new Set())
@@ -160,21 +165,54 @@ export default function KasirPage() {
 
   const grandTotal = cart.reduce((acc, item) => acc + (item.harga_jual || 0) * getQtyNum(item.qty), 0)
 
-  const handleSimpan = async () => {
-    if (cart.length === 0) {
-      alert("Keranjang masih kosong!")
-      return
-    }
-    if (!namaPembeli) {
-      alert("Mohon isi Nama Pembeli!")
-      return
+  const isFormValid = namaPembeli.trim() && 
+                      cart.length > 0 && 
+                      cart.every(item => getQtyNum(item.qty) > 0 && item.harga_jual > 0)
+
+  const validasi = () => {
+    const newErrors: typeof errors = {}
+    let valid = true
+
+    if (!namaPembeli.trim()) {
+      newErrors.namaPembeli = "Nama pembeli wajib diisi"
+      valid = false
     }
 
-    const invalidQty = cart.find(c => getQtyNum(c.qty) <= 0)
-    if (invalidQty) {
-      alert("Qty tidak boleh kosong atau nol")
-      return
+    if (cart.length === 0) {
+      newErrors.cart = "Tambahkan minimal 1 produk"
+      valid = false
     }
+
+    const itemErrors: Record<number, { qty?: string; harga?: string }> = {}
+    cart.forEach(item => {
+      const itemErr: { qty?: string; harga?: string } = {}
+      
+      if (!item.qty || getQtyNum(item.qty) <= 0) {
+        itemErr.qty = "Qty harus > 0"
+        valid = false
+      }
+      
+      if (!item.harga_jual || item.harga_jual <= 0) {
+        itemErr.harga = "Harga harus diisi"
+        valid = false
+      }
+
+      if (Object.keys(itemErr).length > 0) {
+        itemErrors[item.id] = itemErr
+      }
+    })
+
+    if (Object.keys(itemErrors).length > 0) {
+      newErrors.items = itemErrors
+    }
+
+    setErrors(newErrors)
+    return valid
+  }
+
+  const handleSimpan = async () => {
+    setErrors({})
+    if (!validasi()) return
 
     setIsLoading(true)
     try {
@@ -263,6 +301,34 @@ export default function KasirPage() {
     if (confirm("Apakah Anda yakin ingin membatalkan transaksi ini?")) {
       setCart([])
       setNamaPembeli("")
+    }
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey && !isLoading && cart.length > 0 && namaPembeli) {
+        // cek tidak ada input/select yang sedang fokus (kecuali tombol simpan)
+        const activeEl = document.activeElement
+        const isInputFocused = activeEl instanceof HTMLInputElement || 
+                               activeEl instanceof HTMLSelectElement ||
+                               activeEl instanceof HTMLTextAreaElement
+        if (!isInputFocused) handleSimpan()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isLoading, cart, namaPembeli]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCartInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const inputs = Array.from(document.querySelectorAll('.cart-item-input')) as HTMLElement[];
+      const index = inputs.indexOf(e.currentTarget);
+      if (index > -1 && index < inputs.length - 1) {
+        inputs[index + 1].focus();
+      } else if (index === inputs.length - 1) {
+        e.currentTarget.blur();
+      }
     }
   }
 
@@ -357,12 +423,25 @@ export default function KasirPage() {
                   onChange={(e) => {
                     setNamaPembeli(e.target.value)
                     setShowSuggestions(true)
+                    if (errors.namaPembeli) setErrors(prev => ({ ...prev, namaPembeli: undefined }))
                   }}
                   onFocus={() => setShowSuggestions(true)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  className="bg-[#0d1117] border-white/10 text-white text-base h-12 w-full"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      const firstCartInput = document.querySelector('.cart-item-input') as HTMLElement
+                      if (firstCartInput) firstCartInput.focus()
+                    }
+                  }}
+                  className={`bg-[#0d1117] text-white text-base h-12 w-full ${errors.namaPembeli ? 'border-red-500/50 focus-visible:ring-red-500/50' : 'border-white/10'}`}
                   autoComplete="off"
                 />
+                {errors.namaPembeli && (
+                  <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
+                    <span>⚠️</span> {errors.namaPembeli}
+                  </p>
+                )}
                 {showSuggestions && namaPembeli.length > 0 && (
                   <div className="absolute z-50 w-full mt-1 bg-[#161b22] border border-white/10 rounded-xl shadow-xl max-h-48 overflow-y-auto">
                     {customers
@@ -401,6 +480,12 @@ export default function KasirPage() {
             <div className="space-y-3">
               <Label className="text-gray-300 text-base mb-1 block">Daftar Belanjaan</Label>
 
+              {errors.cart && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-400 text-sm flex items-center gap-2">
+                  <span>⚠️</span> {errors.cart}
+                </div>
+              )}
+
               {cart.length === 0 ? (
                 <div className="text-center py-8 bg-[#0d1117] border border-white/5 rounded-xl border-dashed">
                   <span className="text-3xl grayscale opacity-50 block mb-2">🛒</span>
@@ -420,51 +505,91 @@ export default function KasirPage() {
                         <p className="font-semibold text-white text-base leading-tight">{item.nama}</p>
                         <p className="text-base text-white font-medium">{formatRp((item.harga_jual || 0) * item.qty)}</p>
                       </div>
-                      <div className="flex items-center justify-between gap-3 mt-1">
-                        <div className="flex items-center gap-2 flex-1">
-                          <span className="text-gray-400 text-sm">Rp</span>
-                          <Input
-                            type="number"
-                            min="0"
-                            placeholder="Harga..."
-                            value={item.harga_jual || ""}
-                            onChange={(e) => updatePrice(item.id, e.target.value)}
-                            className="bg-[#161b22] border-white/10 text-white h-8 w-full min-w-[80px] px-2 text-right text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                          />
-                        </div>
-                        <span className="text-gray-500 text-xs">×</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <div className="flex items-center bg-[#161b22] border border-white/10 rounded-md h-8 overflow-hidden">
-                            <button
-                              onClick={() => {
-                                const currentQty = getQtyNum(item.qty);
-                                const val = Math.max(0.1, Number((currentQty - 1).toFixed(1)));
-                                updateQty(item.id, val.toString());
-                              }}
-                              className="w-7 h-full bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border-r border-white/10 flex items-center justify-center font-medium"
-                            >
-                              -
-                            </button>
-                            <input
+                      <div className="flex items-start justify-between gap-3 mt-1">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-400 text-sm mt-1">Rp</span>
+                            <Input
                               type="number"
                               min="0"
-                              step="0.1"
-                              value={item.qty}
-                              onChange={(e) => updateQty(item.id, e.target.value)}
-                              className="bg-transparent border-none text-white h-full w-14 px-1 text-center text-sm font-semibold focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none m-0"
-                            />
-                            <button
-                              onClick={() => {
-                                const currentQty = getQtyNum(item.qty);
-                                const val = Number((currentQty + 1).toFixed(1));
-                                updateQty(item.id, val.toString());
+                              placeholder="Harga..."
+                              value={item.harga_jual || ""}
+                              onChange={(e) => {
+                                updatePrice(item.id, e.target.value)
+                                if (errors.items?.[item.id]?.harga) {
+                                  setErrors(prev => ({
+                                    ...prev,
+                                    items: { ...prev.items, [item.id]: { ...prev.items?.[item.id], harga: undefined } }
+                                  }))
+                                }
                               }}
-                              className="w-7 h-full bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border-l border-white/10 flex items-center justify-center font-medium"
-                            >
-                              +
-                            </button>
+                              onKeyDown={handleCartInputKeyDown}
+                              className={`bg-[#161b22] text-white h-8 w-full min-w-[80px] px-2 text-right text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none cart-item-input ${errors.items?.[item.id]?.harga ? 'border-red-500/50' : 'border-white/10'}`}
+                            />
                           </div>
-                          <span className="text-sm font-medium text-gray-400">{item.satuan}</span>
+                          {errors.items?.[item.id]?.harga && (
+                            <p className="text-red-400 text-[10px] mt-0.5 ml-6">{errors.items[item.id].harga}</p>
+                          )}
+                        </div>
+                        <span className="text-gray-500 text-xs shrink-0 self-start mt-2">×</span>
+                        <div className="shrink-0 flex flex-col items-end">
+                          <div className="flex items-center gap-2">
+                            <div className={`flex items-center bg-[#161b22] border rounded-md h-8 overflow-hidden ${errors.items?.[item.id]?.qty ? 'border-red-500/50' : 'border-white/10'}`}>
+                              <button
+                                onClick={() => {
+                                  const currentQty = getQtyNum(item.qty);
+                                  const val = Math.max(0.1, Number((currentQty - 1).toFixed(1)));
+                                  updateQty(item.id, val.toString());
+                                  if (errors.items?.[item.id]?.qty) {
+                                    setErrors(prev => ({
+                                      ...prev,
+                                      items: { ...prev.items, [item.id]: { ...prev.items?.[item.id], qty: undefined } }
+                                    }))
+                                  }
+                                }}
+                                className="w-7 h-full bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border-r border-white/10 flex items-center justify-center font-medium"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={item.qty}
+                                onChange={(e) => {
+                                  updateQty(item.id, e.target.value)
+                                  if (errors.items?.[item.id]?.qty) {
+                                    setErrors(prev => ({
+                                      ...prev,
+                                      items: { ...prev.items, [item.id]: { ...prev.items?.[item.id], qty: undefined } }
+                                    }))
+                                  }
+                                }}
+                                onKeyDown={handleCartInputKeyDown}
+                                className="bg-transparent border-none text-white h-full w-14 px-1 text-center text-sm font-semibold focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none m-0 cart-item-input"
+                              />
+                              <button
+                                onClick={() => {
+                                  const currentQty = getQtyNum(item.qty);
+                                  const val = Number((currentQty + 1).toFixed(1));
+                                  updateQty(item.id, val.toString());
+                                  if (errors.items?.[item.id]?.qty) {
+                                    setErrors(prev => ({
+                                      ...prev,
+                                      items: { ...prev.items, [item.id]: { ...prev.items?.[item.id], qty: undefined } }
+                                    }))
+                                  }
+                                }}
+                                className="w-7 h-full bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border-l border-white/10 flex items-center justify-center font-medium"
+                              >
+                                +
+                              </button>
+                            </div>
+                            <span className="text-sm font-medium text-gray-400 w-8">{item.satuan}</span>
+                          </div>
+                          {errors.items?.[item.id]?.qty && (
+                            <p className="text-red-400 text-[10px] mt-0.5">{errors.items[item.id].qty}</p>
+                          )}
                         </div>
                       </div>
                       <div className="mt-2">
@@ -473,7 +598,8 @@ export default function KasirPage() {
                           placeholder="Keterangan (opsional): Giling, Slice dadu, Slice panjang, dll"
                           value={item.keterangan || ""}
                           onChange={(e) => updateKeterangan(item.id, e.target.value)}
-                          className="bg-[#161b22] border-white/10 text-white h-8 text-xs w-full px-2"
+                          onKeyDown={handleCartInputKeyDown}
+                          className="bg-[#161b22] border-white/10 text-white h-8 text-xs w-full px-2 cart-item-input"
                         />
                       </div>
                     </div>
@@ -494,21 +620,36 @@ export default function KasirPage() {
                 <span className="text-green-400 text-3xl font-bold tracking-tight">{formatRp(grandTotal)}</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <Button
-                  onClick={handleBatal}
-                  variant="outline"
-                  className="h-14 border-red-500/50 hover:bg-red-500/10 hover:border-red-500 text-red-400 text-base"
-                >
-                  Batalkan
-                </Button>
-                <Button
-                  onClick={handleSimpan}
-                  disabled={isLoading}
-                  className="h-14 bg-green-600 hover:bg-green-500 text-white text-base shadow-lg shadow-green-900/20"
-                >
-                  {isLoading ? "Menyimpan..." : "Simpan Transaksi"}
-                </Button>
+              <div className="flex flex-col gap-2 pt-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    onClick={handleBatal}
+                    variant="outline"
+                    className="h-14 border-red-500/50 hover:bg-red-500/10 hover:border-red-500 text-red-400 text-base"
+                  >
+                    Batalkan
+                  </Button>
+                  <Button
+                    onClick={handleSimpan}
+                    disabled={isLoading || !isFormValid}
+                    className={`h-14 text-base shadow-lg transition-all
+                      ${isFormValid
+                        ? 'bg-green-600 hover:bg-green-500 text-white shadow-green-900/20' 
+                        : 'bg-white/5 text-gray-500 cursor-not-allowed border border-white/10'
+                      }`}
+                  >
+                    {isLoading ? "Menyimpan..." : "Simpan Transaksi"}
+                  </Button>
+                </div>
+                {!isFormValid && !isLoading && (
+                  <p className="text-right text-gray-500 text-xs">
+                    {!namaPembeli.trim() 
+                      ? "⚠️ Isi nama pembeli dulu" 
+                      : cart.length === 0 
+                        ? "⚠️ Tambahkan produk ke keranjang"
+                        : "⚠️ Lengkapi qty dan harga semua produk"}
+                  </p>
+                )}
               </div>
             </div>
           </div>
