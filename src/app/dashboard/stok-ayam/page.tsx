@@ -46,7 +46,7 @@ export default function StokAyamPage() {
   const [isHppSubmitting, setIsHppSubmitting] = useState(false)
 
   // Stok Awal
-  const [stokAwalForm, setStokAwalForm] = useState({ produk_id: "", qty: "" })
+  const [stokAwalForm, setStokAwalForm] = useState({ produk_id: "", qty: "", hpp_satuan: "" })
   const [isStokAwalSubmitting, setIsStokAwalSubmitting] = useState(false)
   const [showStokAwalModal, setShowStokAwalModal] = useState(false)
   const stokAwalModalRef = useRef<HTMLDivElement>(null)
@@ -214,24 +214,40 @@ export default function StokAyamPage() {
   }
 
   const handleStokAwalSubmit = async () => {
-    if (!stokAwalForm.produk_id || !stokAwalForm.qty) { alert("Isi semua field!"); return }
+    if (!stokAwalForm.produk_id || !stokAwalForm.qty || !stokAwalForm.hpp_satuan) { alert("Isi semua field!"); return }
     const produk = produkList.find(p => p.id === parseInt(stokAwalForm.produk_id))
+    const qtyStokAwal = parseFloat(stokAwalForm.qty)
+    const hppSatuan = parseFloat(stokAwalForm.hpp_satuan)
     setIsStokAwalSubmitting(true)
     try {
       const existing = stokAwalList.find(s => s.produk_id === parseInt(stokAwalForm.produk_id))
       if (existing) {
-        const { error } = await supabase.from('stok_awal').update({ qty: parseFloat(stokAwalForm.qty) }).eq('id', existing.id)
+        const { error } = await supabase.from('stok_awal').update({ qty: qtyStokAwal }).eq('id', existing.id)
         if (error) throw error
-        setStokAwalList(prev => prev.map(s => s.produk_id === parseInt(stokAwalForm.produk_id) ? { ...s, qty: parseFloat(stokAwalForm.qty) } : s))
+        setStokAwalList(prev => prev.map(s => s.produk_id === parseInt(stokAwalForm.produk_id) ? { ...s, qty: qtyStokAwal } : s))
       } else {
         const { data, error } = await supabase.from('stok_awal').insert({
           produk_id: parseInt(stokAwalForm.produk_id), nama_produk: produk?.nama || "",
-          satuan: produk?.satuan || "", qty: parseFloat(stokAwalForm.qty)
+          satuan: produk?.satuan || "", qty: qtyStokAwal
         }).select().single()
         if (error) throw error
         setStokAwalList(prev => [...prev, data as StokAwal])
       }
-      setStokAwalForm({ produk_id: "", qty: "" })
+
+      await supabase.from('hpp').insert({
+        tanggal: new Date().toISOString().split('T')[0],
+        produk_id: parseInt(stokAwalForm.produk_id),
+        nama_produk: produk?.nama || "",
+        satuan: produk?.satuan || "",
+        hpp_satuan: hppSatuan,
+        qty: qtyStokAwal,
+        total_modal: hppSatuan * qtyStokAwal,
+        nama_supplier: 'Stok Awal',
+        tipe_bayar: 'Tunai',
+        catatan: 'Set stok awal'
+      })
+
+      setStokAwalForm({ produk_id: "", qty: "", hpp_satuan: "" })
       setShowStokAwalModal(false)
       alert("Stok awal berhasil disimpan!")
     } catch (e: any) { alert("Gagal: " + e.message) }
@@ -301,19 +317,10 @@ export default function StokAyamPage() {
       </header>
 
       <main className="p-8 space-y-6">
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-5">
             <p className="text-gray-400 text-sm mb-1">Total Produk</p>
             <p className="text-2xl font-bold text-white">{stokData.length} <span className="text-sm text-gray-500 font-normal">produk</span></p>
-          </div>
-          <div className="bg-[#161b22] border border-green-500/20 rounded-2xl p-5">
-            <p className="text-gray-400 text-sm mb-1">Total Nilai Stok</p>
-            <p className="text-xl font-bold text-green-400">{formatRp(totalNilaiStok)}</p>
-            <p className="text-xs text-gray-500 mt-1">stok × HPP terakhir</p>
-          </div>
-          <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-5">
-            <p className="text-gray-400 text-sm mb-1">Modal Pembelian</p>
-            <p className="text-xl font-bold text-blue-400">{formatRp(hppList.reduce((a, h) => a + h.total_modal, 0))}</p>
           </div>
           <div className="bg-[#161b22] border border-yellow-500/20 rounded-2xl p-5">
             <p className="text-gray-400 text-sm mb-1">Stok Menipis</p>
@@ -446,14 +453,14 @@ export default function StokAyamPage() {
                           {produkList.map(p => <option key={p.id} value={p.id}>{p.nama} ({p.satuan})</option>)}
                         </select>
                       </div>
-                      <div className="col-span-2">
-                        <input type="number" min="0" value={row.hpp_satuan} onChange={e => updateHppRow(idx, 'hpp_satuan', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500" />
-                      </div>
-                      <div className="col-span-2">
-                        <input type="number" min="0" step="1" value={row.qty} onChange={e => updateHppRow(idx, 'qty', e.target.value)}
-                          className="w-full bg-[#161b22] border border-white/10 text-white rounded-lg px-3 h-10 text-sm focus:outline-none focus:border-green-500" placeholder={produk?.satuan || "0"} />
-                      </div>
+                      <td className="px-2 py-2">
+                        <input type="number" min="0" value={row.hpp_satuan} onChange={e => updateHppRow(idx, 'hpp_satuan', e.target.value)} onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Rp" />
+                      </td>
+                      <td className="px-2 py-2">
+                        <input type="number" min="0" step="1" value={row.qty} onChange={e => updateHppRow(idx, 'qty', e.target.value)} onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Qty" />
+                      </td>
                       <div className="col-span-2">
                         <p className="text-green-400 font-semibold text-sm px-1">{subtotal > 0 ? formatRp(subtotal) : '-'}</p>
                       </div>
@@ -544,17 +551,11 @@ export default function StokAyamPage() {
                   {produkList.map(p => <option key={p.id} value={p.id}>{p.nama} ({p.satuan})</option>)}
                 </select>
               </div>
-              {opnameForm.produk_id && (
-                <div className="bg-[#0d1117] border border-white/10 rounded-xl px-4 py-3">
-                  <p className="text-xs text-gray-400">Stok Sistem Saat Ini</p>
-                  <p className="text-lg font-bold text-white">{getSistemStok(parseInt(opnameForm.produk_id))} {selectedProdukOpname?.satuan}</p>
-                </div>
-              )}
-              <div className="space-y-1.5">
-                <label className="text-gray-300 text-sm">Stok Aktual <span className="text-red-500">*</span></label>
-                <input type="number" min="0" step="1" value={opnameForm.qty_aktual}
+              <div className="space-y-1.5 col-span-3 lg:col-span-1">
+                <label className="text-gray-400 text-sm">Qty Aktual Fisik</label>
+                <input type="number" min="0" step="1" value={opnameForm.qty_aktual} onWheel={(e) => (e.target as HTMLInputElement).blur()}
                   onChange={e => setOpnameForm({ ...opnameForm, qty_aktual: e.target.value })}
-                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500" placeholder="0" />
+                  className="w-full bg-[#161b22] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500/50" placeholder="0" />
               </div>
               {opnameForm.produk_id && opnameForm.qty_aktual !== "" && (
                 <div className={`border rounded-xl px-4 py-3 ${parseFloat(opnameForm.qty_aktual) - getSistemStok(parseInt(opnameForm.produk_id)) >= 0 ? 'bg-blue-500/10 border-blue-500/20' : 'bg-orange-500/10 border-orange-500/20'}`}>
@@ -633,8 +634,14 @@ export default function StokAyamPage() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-gray-300 text-sm">Qty Stok Awal <span className="text-red-500">*</span></label>
-                <input type="number" min="0" step="1" value={stokAwalForm.qty} onChange={e => setStokAwalForm({ ...stokAwalForm, qty: e.target.value })}
+                <input type="number" min="0" step="1" value={stokAwalForm.qty} onChange={e => setStokAwalForm({ ...stokAwalForm, qty: e.target.value })} onWheel={(e) => (e.target as HTMLInputElement).blur()}
                   className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500" placeholder="0" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-gray-300 text-sm">HPP Satuan (Rp) <span className="text-red-500">*</span></label>
+                <input type="number" min="0" value={stokAwalForm.hpp_satuan} onChange={e => setStokAwalForm({ ...stokAwalForm, hpp_satuan: e.target.value })} onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500" placeholder="0" />
+                <p className="text-xs text-gray-500">Harga beli per satuan produk ini</p>
               </div>
               <p className="text-xs text-gray-500">Jika produk sudah punya stok awal, nilai akan di-update.</p>
             </div>

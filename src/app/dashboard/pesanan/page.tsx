@@ -22,6 +22,9 @@ export default function PesananPengirimanPage() {
   const [pengiriman, setPengiriman] = useState<any[]>([])
   const [pelanggan, setPelanggan] = useState<any[]>([])
   const [produk, setProduk] = useState<any[]>([])
+
+  const [searchPengiriman, setSearchPengiriman] = useState("")
+  const [sortPengiriman, setSortPengiriman] = useState("terbaru")
   
   // Modal Tambah Pesanan
   const [showAddModal, setShowAddModal] = useState(false)
@@ -138,6 +141,28 @@ export default function PesananPengirimanPage() {
   }
   
   const grandTotal = cart.reduce((acc, c) => acc + c.subtotal, 0)
+
+  const filteredPengiriman = useMemo(() => {
+    let list = [...pengiriman]
+    
+    // Filter search
+    if (searchPengiriman) {
+      list = list.filter(p =>
+        p.transaksi?.no_nota?.toLowerCase().includes(searchPengiriman.toLowerCase()) ||
+        p.transaksi?.nama_pembeli?.toLowerCase().includes(searchPengiriman.toLowerCase())
+      )
+    }
+    
+    // Sort
+    if (sortPengiriman === 'terbaru') list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    else if (sortPengiriman === 'terlama') list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    else if (sortPengiriman === 'nota_az') list.sort((a, b) => (a.transaksi?.no_nota || '').localeCompare(b.transaksi?.no_nota || ''))
+    else if (sortPengiriman === 'nota_za') list.sort((a, b) => (b.transaksi?.no_nota || '').localeCompare(a.transaksi?.no_nota || ''))
+    else if (sortPengiriman === 'nama_az') list.sort((a, b) => (a.transaksi?.nama_pembeli || '').localeCompare(b.transaksi?.nama_pembeli || ''))
+    else if (sortPengiriman === 'total_terbesar') list.sort((a, b) => (b.transaksi?.total || 0) - (a.transaksi?.total || 0))
+    
+    return list
+  }, [pengiriman, searchPengiriman, sortPengiriman])
 
   const handleSimpanPesanan = async () => {
     if (!namaPembeli || cart.length === 0) return alert("Lengkapi data")
@@ -544,10 +569,31 @@ export default function PesananPengirimanPage() {
               </div>
             </div>
 
+            <div className="flex gap-3 items-center">
+              <input
+                value={searchPengiriman}
+                onChange={e => setSearchPengiriman(e.target.value)}
+                placeholder="🔍 Cari no nota atau nama pembeli..."
+                className="flex-1 bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50"
+              />
+              <select
+                value={sortPengiriman}
+                onChange={e => setSortPengiriman(e.target.value)}
+                className="bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none cursor-pointer"
+              >
+                <option value="terbaru">Terbaru</option>
+                <option value="terlama">Terlama</option>
+                <option value="nota_az">No Nota A-Z</option>
+                <option value="nota_za">No Nota Z-A</option>
+                <option value="nama_az">Nama A-Z</option>
+                <option value="total_terbesar">Total Terbesar</option>
+              </select>
+            </div>
+
             <div className="space-y-4">
-              {pengiriman.length === 0 ? (
+              {filteredPengiriman.length === 0 ? (
                 <div className="text-center py-12 text-gray-500 bg-[#161b22] rounded-2xl border border-white/10">Tidak ada pengiriman</div>
-              ) : pengiriman.map(p => {
+              ) : filteredPengiriman.map(p => {
                 const tx = p.transaksi || {}
                 const up = pengirimanUpdates[p.id] || {}
                 const isTerkirimLocal = up.status ? up.status === 'terkirim' || up.status === 'nota_kembali' : p.status === 'terkirim' || p.status === 'nota_kembali'
@@ -716,6 +762,7 @@ export default function PesananPengirimanPage() {
                         const val = parseFloat(e.target.value);
                         updateCartItem(idx, 'qty', isNaN(val) ? 0 : val)
                       }} 
+                      onWheel={(e) => (e.target as HTMLInputElement).blur()}
                       className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 h-10 text-sm text-white focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                       placeholder="0" 
                     />
@@ -728,6 +775,7 @@ export default function PesananPengirimanPage() {
                         const val = parseFloat(e.target.value);
                         updateCartItem(idx, 'harga', isNaN(val) ? 0 : val)
                       }} 
+                      onWheel={(e) => (e.target as HTMLInputElement).blur()}
                       className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 h-10 text-sm text-white focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                       placeholder="0" 
                     />
@@ -813,6 +861,7 @@ export default function PesananPengirimanPage() {
                     step="0.1"
                     value={item.qty === 0 ? '' : item.qty}
                     onChange={e => updateEditItem(idx, 'qty', e.target.value)}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
                     placeholder="0"
                     className="bg-[#161b22] border border-white/10 rounded-lg px-3 py-2 text-sm text-white text-right focus:outline-none focus:border-green-500/50 appearance-none w-full"
                   />
@@ -823,6 +872,7 @@ export default function PesananPengirimanPage() {
                     min="0"
                     value={item.harga === 0 ? '' : item.harga}
                     onChange={e => updateEditItem(idx, 'harga', e.target.value)}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
                     placeholder="0"
                     className="bg-[#161b22] border border-white/10 rounded-lg px-3 py-2 text-sm text-white text-right focus:outline-none focus:border-green-500/50 appearance-none w-full"
                   />

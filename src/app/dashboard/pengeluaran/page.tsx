@@ -309,6 +309,7 @@ export default function PengeluaranPage() {
                   <label className="text-gray-300 text-sm">Jumlah (Rp) <span className="text-red-500">*</span></label>
                   <input type="number" min="0" value={opexForm.jumlah}
                     onChange={e => setOpexForm(f => ({ ...f, jumlah: e.target.value }))}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
                     className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500"
                     placeholder="0" />
                 </div>
@@ -466,6 +467,7 @@ export default function PengeluaranPage() {
                   <label className="text-gray-300 text-sm">Jumlah (Rp) <span className="text-red-500">*</span></label>
                   <input type="number" min="0" value={capexForm.jumlah}
                     onChange={e => setCapexForm(f => ({ ...f, jumlah: e.target.value }))}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
                     className="w-full bg-[#0d1117] border border-white/10 text-white rounded-xl px-4 h-10 text-sm focus:outline-none focus:border-green-500"
                     placeholder="0" />
                 </div>

@@ -491,6 +491,7 @@ export default function PiutangPage() {
                     max={selectedTx.sisa}
                     value={amountPaid}
                     onChange={e => setAmountPaid(e.target.value)}
+                    onWheel={(e) => (e.target as HTMLInputElement).blur()}
                     className="flex-1 bg-transparent text-white text-lg px-4 py-3 focus:outline-none font-mono [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     placeholder="0"
                   />

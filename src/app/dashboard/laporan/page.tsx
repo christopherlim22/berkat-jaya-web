@@ -422,51 +422,43 @@ export default function LaporanPage() {
   const totalHPP = useMemo(() => hppList.reduce((acc, h) => acc + h.total_modal, 0), [hppList])
 
   const cogsData = useMemo(() => {
-    const startDate = new Date(selectedYear, selectedMonth, 1)
-    const endDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999)
+    // HPP = sum(qty_terjual × hpp_satuan) per produk
+    // Ambil dari transaksi_detail bulan ini × hpp_satuan terakhir per produk
 
-    const allNama = Array.from(new Set([
-      ...produkList.map(p => p.nama),
-      ...hppAllList.map(h => h.nama_produk),
-    ]))
-
+    // hppSatuanMap: hpp satuan terakhir per produk dari hppAllList
     const hppSatuanMap: Record<string, number> = {}
-    hppAllList.forEach(h => { hppSatuanMap[h.nama_produk] = h.hpp_satuan })
+    hppAllList.forEach(h => {
+      hppSatuanMap[h.nama_produk] = h.hpp_satuan
+    })
 
-    const stokAwalProduk: Record<string, number> = {}
-    produkList.forEach(p => { stokAwalProduk[p.nama] = p.stok_awal })
+    // Hitung qty terjual per produk dari transaksiDetail bulan ini
+    const qtySoldMap: Record<string, number> = {}
+    transaksiDetail.forEach(td => {
+      qtySoldMap[td.nama_produk] = (qtySoldMap[td.nama_produk] || 0) + td.qty
+    })
 
-    const getTanggal = (d: DetailWithDate): string | null => {
-      if (!d.transaksi) return null
-      if (Array.isArray(d.transaksi)) return d.transaksi[0]?.tanggal ?? null
-      return d.transaksi.tanggal
+    // Hitung total HPP = sum(qty_terjual × hpp_satuan)
+    let totalCOGS = 0
+    const breakdown: { nama: string; qty: number; hpp_satuan: number; total: number }[] = []
+
+    Object.entries(qtySoldMap).forEach(([nama, qty]) => {
+      const hpp_satuan = hppSatuanMap[nama] || 0
+      const total = qty * hpp_satuan
+      totalCOGS += total
+      if (hpp_satuan > 0) {
+        breakdown.push({ nama, qty, hpp_satuan, total })
+      }
+    })
+
+    return {
+      cogs: totalCOGS,
+      breakdown,
+      // Tetap sediakan nilai ini untuk kompatibilitas display lama
+      totalNilaiStokAwal: 0,
+      pembelianBulan: hppList.reduce((a, h) => a + h.total_modal, 0),
+      totalNilaiStokAkhir: 0,
     }
-
-    let totalNilaiStokAwal = 0
-    let totalNilaiStokAkhir = 0
-
-    for (const nama of allNama) {
-      const hppSatuan = hppSatuanMap[nama] || 0
-      if (!hppSatuan) continue
-
-      const masukSebelum = hppAllList.filter(h => h.nama_produk === nama && new Date(h.tanggal) < startDate).reduce((a, h) => a + h.qty, 0)
-      const keluarSebelum = detailAllList.filter(d => { const t = getTanggal(d); return d.nama_produk === nama && t && new Date(t) < startDate }).reduce((a, d) => a + d.qty, 0)
-      const opnameSebelum = opnameAllList.filter(o => o.nama_produk === nama && new Date(o.tanggal) < startDate).reduce((a, o) => a + o.selisih, 0)
-      const stokAwalQty = (stokAwalProduk[nama] || 0) + masukSebelum - keluarSebelum + opnameSebelum
-
-      const masukBulan = hppAllList.filter(h => h.nama_produk === nama && new Date(h.tanggal) >= startDate && new Date(h.tanggal) <= endDate).reduce((a, h) => a + h.qty, 0)
-      const keluarBulan = detailAllList.filter(d => { const t = getTanggal(d); return d.nama_produk === nama && t && new Date(t) >= startDate && new Date(t) <= endDate }).reduce((a, d) => a + d.qty, 0)
-      const opnameBulan = opnameAllList.filter(o => o.nama_produk === nama && new Date(o.tanggal) >= startDate && new Date(o.tanggal) <= endDate).reduce((a, o) => a + o.selisih, 0)
-      const stokAkhirQty = stokAwalQty + masukBulan - keluarBulan + opnameBulan
-
-      totalNilaiStokAwal += Math.max(0, stokAwalQty) * hppSatuan
-      totalNilaiStokAkhir += Math.max(0, stokAkhirQty) * hppSatuan
-    }
-
-    const pembelianBulan = totalHPP
-    const cogs = totalNilaiStokAwal + pembelianBulan - totalNilaiStokAkhir
-    return { totalNilaiStokAwal, pembelianBulan, totalNilaiStokAkhir, cogs }
-  }, [produkList, hppAllList, detailAllList, opnameAllList, selectedMonth, selectedYear, totalHPP])
+  }, [transaksiDetail, hppAllList, hppList])
 
   const labaKotor = omzet.total - cogsData.cogs
   const labaBersih = labaKotor - totalPengeluaran
@@ -977,21 +969,12 @@ export default function LaporanPage() {
                       <div>
                         <p className="text-gray-400 text-sm mb-1">HPP / COGS</p>
                         <p className="text-3xl font-bold text-red-400">- {formatRp(cogsData.cogs)}</p>
-                        <p className="text-xs text-gray-500 mt-1">Stok Awal + Pembelian − Stok Akhir</p>
+                        <p className="text-xs text-gray-500 mt-1">Nilai barang terjual × HPP satuan</p>
                       </div>
                       <div className="border-t border-white/5 pt-3 space-y-1 text-xs">
-                        <div className="flex justify-between text-gray-500">
-                          <span>+ Nilai Stok Awal</span>
-                          <span className="text-gray-300">{formatRp(cogsData.totalNilaiStokAwal)}</span>
-                        </div>
-                        <div className="flex justify-between text-gray-500">
-                          <span>+ Pembelian Bulan</span>
-                          <span className="text-gray-300">{formatRp(cogsData.pembelianBulan)}</span>
-                        </div>
-                        <div className="flex justify-between text-gray-500">
-                          <span>− Nilai Stok Akhir</span>
-                          <span className="text-gray-300">{formatRp(cogsData.totalNilaiStokAkhir)}</span>
-                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Dihitung dari qty terjual × HPP satuan per produk
+                        </p>
                       </div>
                     </div>
                     <div className="bg-[#161b22] border border-blue-500/20 rounded-2xl p-6">
@@ -1066,7 +1049,7 @@ export default function LaporanPage() {
                     <tbody className="divide-y divide-white/[0.02]">
                       {[
                         { label: "Omzet Penjualan", value: omzet.total, color: "text-green-400", sign: "" },
-                        { label: "HPP / COGS (Stok Awal + Beli − Stok Akhir)", value: cogsData.cogs, color: "text-red-400", sign: "- " },
+                        { label: "HPP / COGS", value: cogsData.cogs, color: "text-red-400", sign: "- " },
                         { label: "Laba Kotor", value: labaKotor, color: labaKotor >= 0 ? "text-blue-400" : "text-red-400", sign: "", bold: true },
                         { label: "Pengeluaran Operasional (OpEx)", value: totalPengeluaran, color: "text-orange-400", sign: "- " },
                         { label: "Laba Bersih", value: labaBersih, color: labaBersih >= 0 ? "text-green-400" : "text-red-400", sign: "", bold: true },
@@ -1135,21 +1118,19 @@ export default function LaporanPage() {
                         <td className="px-6 py-3"></td>
                         <td className="px-6 py-3"></td>
                       </tr>
-                      <tr>
-                        <td className="px-6 py-2 text-gray-300 pl-10">Persediaan Awal</td>
-                        <td className="px-6 py-2 text-right">{formatRp(cogsData.totalNilaiStokAwal)}</td>
-                        <td className="px-6 py-2 text-right text-gray-500">{pct(cogsData.totalNilaiStokAwal, omzet.total)}</td>
-                      </tr>
-                      <tr>
-                        <td className="px-6 py-2 text-gray-300 pl-10">Pembelian Periode</td>
-                        <td className="px-6 py-2 text-right">{formatRp(cogsData.pembelianBulan)}</td>
-                        <td className="px-6 py-2 text-right text-gray-500">{pct(cogsData.pembelianBulan, omzet.total)}</td>
-                      </tr>
-                      <tr>
-                        <td className="px-6 py-2 text-gray-300 pl-10">Persediaan Akhir</td>
-                        <td className="px-6 py-2 text-right">({formatRp(cogsData.totalNilaiStokAkhir)})</td>
-                        <td className="px-6 py-2 text-right text-gray-500">{pct(cogsData.totalNilaiStokAkhir, omzet.total)}</td>
-                      </tr>
+                      {cogsData.breakdown.map((item, i) => (
+                        <tr key={i} className="hover:bg-white/[0.01]">
+                          <td className="px-6 py-2 pl-10 text-gray-400 text-xs">
+                            → {item.nama} ({item.qty} × {formatRp(item.hpp_satuan)})
+                          </td>
+                          <td className="px-6 py-2 text-right text-gray-400 text-xs">
+                            {formatRp(item.total)}
+                          </td>
+                          <td className="px-6 py-2 text-right text-gray-500 text-xs">
+                            {pct(item.total, omzet.total)}
+                          </td>
+                        </tr>
+                      ))}
                       <tr className="border-t border-white/5">
                         <td className="px-6 py-3 text-red-300 font-semibold pl-10">Total HPP</td>
                         <td className="px-6 py-3 text-right font-semibold text-red-300">{formatRp(cogsData.cogs)}</td>
@@ -1236,14 +1217,14 @@ export default function LaporanPage() {
                                 <span className="text-gray-300 w-40">Kas</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaKas} onChange={e => setNeracaKas(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaKas} onChange={e => setNeracaKas(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-2 border-b border-white/5">
                                 <span className="text-gray-300 w-40">Bank</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaBank} onChange={e => setNeracaBank(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaBank} onChange={e => setNeracaBank(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-2 border-b border-white/5">
@@ -1274,21 +1255,21 @@ export default function LaporanPage() {
                                 <span className="text-gray-300 w-40">Peralatan</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaPeralatan} onChange={e => setNeracaPeralatan(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaPeralatan} onChange={e => setNeracaPeralatan(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-2 border-b border-white/5">
                                 <span className="text-gray-300 w-40">Kendaraan</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaKendaraan} onChange={e => setNeracaKendaraan(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaKendaraan} onChange={e => setNeracaKendaraan(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-2 border-b border-white/5">
                                 <span className="text-gray-300 w-40">Tanah / Bangunan</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaTanahBangunan} onChange={e => setNeracaTanahBangunan(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaTanahBangunan} onChange={e => setNeracaTanahBangunan(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-3 mt-1 border-t border-white/10">
@@ -1324,7 +1305,7 @@ export default function LaporanPage() {
                                 <span className="text-gray-300 w-40">Hutang Modal</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaHutangModal} onChange={e => setNeracaHutangModal(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaHutangModal} onChange={e => setNeracaHutangModal(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-3 mt-1 border-t border-white/10">
@@ -1341,7 +1322,7 @@ export default function LaporanPage() {
                                 <span className="text-gray-300 w-40">Modal Usaha</span>
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-500 text-sm">Rp</span>
-                                  <input type="number" value={neracaModalUsaha} onChange={e => setNeracaModalUsaha(Number(e.target.value))} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
+                                  <input type="number" value={neracaModalUsaha} onChange={e => setNeracaModalUsaha(Number(e.target.value))} onWheel={(e) => (e.target as HTMLInputElement).blur()} className="bg-[#0d1117] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm w-36 text-right focus:outline-none focus:border-green-500/50" />
                                 </div>
                               </div>
                               <div className="flex justify-between items-center py-2 border-b border-white/5">
