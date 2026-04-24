@@ -21,6 +21,16 @@ export default function DashboardLayout({
       }
     }
     checkRole()
+
+    // Global numeric input scroll prevention
+    const handleWheel = (e: WheelEvent) => {
+      const activeEl = document.activeElement
+      if (activeEl instanceof HTMLInputElement && activeEl.type === 'number') {
+        activeEl.blur()
+      }
+    }
+    window.addEventListener('wheel', handleWheel, { passive: true })
+    return () => window.removeEventListener('wheel', handleWheel)
   }, [pathname, router])
 
   return (

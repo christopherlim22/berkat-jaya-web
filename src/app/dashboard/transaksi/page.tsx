@@ -707,6 +707,7 @@ export default function TransaksiPage() {
                                 newD[idx].subtotal = val * newD[idx].harga
                                 setEditDetail(newD)
                               }}
+                              onWheel={(e) => (e.target as HTMLInputElement).blur()}
                               className="w-full bg-transparent border-none text-white focus:ring-0 focus:outline-none text-center p-0" />
                           </td>
                           <td className="px-4 py-3">
@@ -718,6 +719,7 @@ export default function TransaksiPage() {
                                 newD[idx].subtotal = newD[idx].qty * val
                                 setEditDetail(newD)
                               }}
+                              onWheel={(e) => (e.target as HTMLInputElement).blur()}
                               className="w-full bg-transparent border-none text-white focus:ring-0 focus:outline-none text-right p-0" />
                           </td>
                           <td className="px-4 py-3 text-right font-medium text-white">{formatRp(item.subtotal)}</td>

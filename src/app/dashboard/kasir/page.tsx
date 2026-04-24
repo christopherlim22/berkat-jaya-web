@@ -43,6 +43,11 @@ export default function KasirPage() {
   const [customers, setCustomers] = useState<string[]>([])
   const [piutangNames, setPiutangNames] = useState<Set<string>>(new Set())
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [searchProduct, setSearchProduct] = useState("")
+
+  const filteredProducts = products.filter(p => 
+    p.nama.toLowerCase().includes(searchProduct.toLowerCase())
+  )
 
   // Drag-resize state
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH)
@@ -344,18 +349,30 @@ export default function KasirPage() {
       <main className={`flex h-[calc(100vh-89px)] ${isDragging ? 'select-none cursor-col-resize' : ''}`}>
         {/* LEFT COLUMN - PRODUCTS GRID */}
         <div className="flex-1 p-8 overflow-y-auto">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="font-bold text-white text-xl">Daftar Produk</h3>
-            <span className="text-sm text-gray-400 bg-white/[0.03] px-3 py-1.5 rounded-lg border border-white/[0.05]">
+          <div className="flex flex-col md:flex-row items-center justify-between mb-6 gap-4">
+            <h3 className="font-bold text-white text-xl whitespace-nowrap">Daftar Produk</h3>
+            <div className="relative w-full max-w-sm">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-500">🔍</span>
+              <input
+                type="text"
+                placeholder="Cari produk..."
+                value={searchProduct}
+                onChange={(e) => setSearchProduct(e.target.value)}
+                className="w-full bg-[#161b22] border border-white/10 text-white text-sm rounded-xl pl-10 pr-4 py-2 focus:outline-none focus:border-green-500/50 hover:border-white/20 transition-colors h-10"
+              />
+            </div>
+            <span className="hidden md:block text-sm text-gray-400 bg-white/[0.03] px-3 py-1.5 rounded-lg border border-white/[0.05]">
               Klik untuk menambah ke keranjang
             </span>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {products.length === 0 ? (
-              <div className="col-span-full text-center py-12 text-gray-500">Memuat produk...</div>
+            {filteredProducts.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-gray-500">
+                {products.length === 0 ? "Memuat produk..." : "Produk tidak ditemukan."}
+              </div>
             ) : (
-              products.map((prod) => (
+              filteredProducts.map((prod) => (
                 <button
                   key={prod.id}
                   onClick={() => addToCart(prod)}
@@ -524,6 +541,7 @@ export default function KasirPage() {
                                 }
                               }}
                               onKeyDown={handleCartInputKeyDown}
+                              onWheel={(e) => (e.target as HTMLInputElement).blur()}
                               className={`bg-[#161b22] text-white h-8 w-full min-w-[80px] px-2 text-right text-sm [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none cart-item-input ${errors.items?.[item.id]?.harga ? 'border-red-500/50' : 'border-white/10'}`}
                             />
                           </div>
@@ -566,6 +584,7 @@ export default function KasirPage() {
                                   }
                                 }}
                                 onKeyDown={handleCartInputKeyDown}
+                                onWheel={(e) => (e.target as HTMLInputElement).blur()}
                                 className="bg-transparent border-none text-white h-full w-14 px-1 text-center text-sm font-semibold focus:outline-none appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none m-0 cart-item-input"
                               />
                               <button
