@@ -453,14 +453,14 @@ export default function StokAyamPage() {
                           {produkList.map(p => <option key={p.id} value={p.id}>{p.nama} ({p.satuan})</option>)}
                         </select>
                       </div>
-                      <td className="px-2 py-2">
+                      <div className="col-span-2">
                         <input type="number" min="0" value={row.hpp_satuan} onChange={e => updateHppRow(idx, 'hpp_satuan', e.target.value)} onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Rp" />
-                      </td>
-                      <td className="px-2 py-2">
+                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 h-10 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Rp" />
+                      </div>
+                      <div className="col-span-2">
                         <input type="number" min="0" step="1" value={row.qty} onChange={e => updateHppRow(idx, 'qty', e.target.value)} onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Qty" />
-                      </td>
+                          className="w-full bg-[#161b22] border border-white/10 rounded-lg px-3 h-10 text-white text-sm focus:outline-none focus:border-green-500/50" placeholder="Qty" />
+                      </div>
                       <div className="col-span-2">
                         <p className="text-green-400 font-semibold text-sm px-1">{subtotal > 0 ? formatRp(subtotal) : '-'}</p>
                       </div>
