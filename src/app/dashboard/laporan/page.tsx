@@ -6,7 +6,7 @@ import { Calendar, DollarSign, Package, Users, Banknote, CreditCard, Wallet, Tre
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  PieChart, Pie, Cell, Sector
+  PieChart, Pie, Cell, Sector, ReferenceLine
 } from "recharts"
 
 type Transaksi = {
@@ -137,13 +137,15 @@ export default function LaporanPage() {
     const fetchData = async () => {
       setIsLoading(true)
 
-      const startDate = new Date(selectedYear, selectedMonth, 1)
-      const endDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999)
-      const startStr = startDate.toISOString().split('T')[0]
-      const endStr = endDate.toISOString().split('T')[0]
+      const mm = String(selectedMonth + 1).padStart(2, '0')
+      const startStr = `${selectedYear}-${mm}-01`
+      const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
+      const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, '0')}`
+      const startDateTimeStr = `${startStr}T00:00:00`
+      const endDateTimeStr = `${endStr}T23:59:59.999`
 
       const [trxRes, pengeluaranRes, hppRes, produkRes, hppAllRes, opnameAllRes, detailAllRes] = await Promise.all([
-        supabase.from("transaksi").select("*").gte("tanggal", startDate.toISOString()).lte("tanggal", endDate.toISOString()),
+        supabase.from("transaksi").select("*").gte("tanggal", startDateTimeStr).lte("tanggal", endDateTimeStr),
         supabase.from("pengeluaran").select("*").gte("tanggal", startStr).lte("tanggal", endStr).order("tanggal", { ascending: false }),
         supabase.from("hpp").select("id, tanggal, total_modal").gte("tanggal", startStr).lte("tanggal", endStr),
         supabase.from("produk").select("id, nama, stok_awal"),
@@ -161,13 +163,13 @@ export default function LaporanPage() {
       if (opnameAllRes.data) setOpnameAllList(opnameAllRes.data as OpnameRecord[])
       if (detailAllRes.data) setDetailAllList(detailAllRes.data as unknown as DetailWithDate[])
 
-      if (trxData.length > 0) {
-        const trxIds = trxData.map(t => t.id)
-        const { data: detailData } = await supabase.from("transaksi_detail").select("*").in("transaksi_id", trxIds)
-        setTransaksiDetail(detailData as TransaksiDetail[] || [])
-      } else {
-        setTransaksiDetail([])
-      }
+      const { data: detailData } = await supabase
+        .from('transaksi_detail')
+        .select('*, transaksi!inner(tanggal, nama_pembeli)')
+        .gte('transaksi.tanggal', startDateTimeStr)
+        .lte('transaksi.tanggal', endDateTimeStr)
+
+      setTransaksiDetail(detailData as TransaksiDetail[] || [])
 
       setIsLoading(false)
     }
@@ -188,16 +190,16 @@ export default function LaporanPage() {
         const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
         const startStr = `${selectedYear}-${mm}-01`
         const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, "0")}`
-        const startDate = new Date(selectedYear, selectedMonth, 1)
-        const endDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999)
+        const startDateTimeStr = `${startStr}T00:00:00`
+        const endDateTimeStr = `${endStr}T23:59:59.999`
 
         const [trxRes, piutangRes, pengeluaranRes, utangRes] = await Promise.all([
           supabase
             .from("transaksi")
             .select("tanggal, jenis_pembayaran, total, no_nota, nama_pembeli")
             .in("jenis_pembayaran", ["Tunai", "Transfer"])
-            .gte("tanggal", startDate.toISOString())
-            .lte("tanggal", endDate.toISOString())
+            .gte("tanggal", startDateTimeStr)
+            .lte("tanggal", endDateTimeStr)
             .order("tanggal", { ascending: true }),
           supabase
             .from("piutang")
@@ -287,8 +289,10 @@ export default function LaporanPage() {
       setIsLoadingNeraca(true)
       try {
         const endDate = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999)
-        const endStr = endDate.toISOString().split('T')[0]
-        const endIso = endDate.toISOString()
+        const mm = String(selectedMonth + 1).padStart(2, '0')
+        const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
+        const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, '0')}`
+        const endIso = `${endStr}T23:59:59.999`
 
         // 1. Fetch Manual Configs
         const keys = [
@@ -381,15 +385,19 @@ export default function LaporanPage() {
 
   // Penjualan
   const omzet = useMemo(() => {
-    let total = 0, tunai = 0, transfer = 0, piutang = 0
+    // Omzet dari sum subtotal transaksi_detail (konsisten dengan Rekap Produk)
+    const total = transaksiDetail.reduce((acc, td) => acc + (td.subtotal || td.qty * td.harga || 0), 0)
+
+    // Breakdown pembayaran tetap dari transaksi (untuk info saja)
+    let tunai = 0, transfer = 0, piutang = 0
     transaksi.forEach(t => {
-      total += t.total
       if (t.jenis_pembayaran === "Tunai") tunai += t.total
       else if (t.jenis_pembayaran === "Transfer") transfer += t.total
-      else if (t.jenis_pembayaran === "Piutang") piutang += t.total
+      else if (t.jenis_pembayaran === "Piutang" || t.jenis_pembayaran === "Tempo") piutang += t.total
     })
+
     return { total, tunai, transfer, piutang }
-  }, [transaksi])
+  }, [transaksiDetail, transaksi])
 
   const topProducts = useMemo(() => {
     const map: Record<string, number> = {}
@@ -602,30 +610,76 @@ export default function LaporanPage() {
   }, [pengeluaran])
 
   // ── Chart data: 12 bulan terakhir (Laba tab) ─────────────────────────────────
-  const [monthlyTrendData, setMonthlyTrendData] = useState<{ label: string; omzet: number; hpp: number; laba: number }[]>([])
+  const [monthlyTrendData, setMonthlyTrendData] = useState<{ label: string; laba: number }[]>([])
 
   useEffect(() => {
     const fetchTrend = async () => {
-      const results: { label: string; omzet: number; hpp: number; laba: number }[] = []
+      const results: { label: string; laba: number }[] = []
       const now = new Date()
+
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
         const start = new Date(d.getFullYear(), d.getMonth(), 1)
-        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999)
-        const [trxRes, hppRes, penRes] = await Promise.all([
-          supabase.from('transaksi').select('total').gte('tanggal', start.toISOString()).lte('tanggal', end.toISOString()),
-          supabase.from('hpp').select('total_modal').gte('tanggal', start.toISOString().split('T')[0]).lte('tanggal', end.toISOString().split('T')[0]),
-          supabase.from('pengeluaran').select('jumlah').gte('tanggal', start.toISOString().split('T')[0]).lte('tanggal', end.toISOString().split('T')[0]),
-        ])
-        const omzetMonth = (trxRes.data || []).reduce((a: number, t: any) => a + t.total, 0)
-        const hppMonth = (hppRes.data || []).reduce((a: number, h: any) => a + h.total_modal, 0)
-        const opexMonth = (penRes.data || []).reduce((a: number, p: any) => a + p.jumlah, 0)
-        const labaMonth = omzetMonth - hppMonth - opexMonth
+        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+        
+        const mm = String(start.getMonth() + 1).padStart(2, '0')
+        const yy = start.getFullYear()
+        const lastDay = end.getDate()
+        
+        const startDateTimeStr = `${yy}-${mm}-01T00:00:00`
+        const endDateTimeStr = `${yy}-${mm}-${String(lastDay).padStart(2, '0')}T23:59:59.999`
+        const endDateStr = `${yy}-${mm}-${String(lastDay).padStart(2, '0')}`
+        const startDateStr = `${yy}-${mm}-01`
+
+        // Fetch transaksi_detail bulan ini
+        const { data: detailBulan } = await supabase
+          .from('transaksi_detail')
+          .select('nama_produk, qty, harga, subtotal, transaksi!inner(tanggal)')
+          .gte('transaksi.tanggal', startDateTimeStr)
+          .lte('transaksi.tanggal', endDateTimeStr)
+
+        // Fetch hpp semua s.d. akhir bulan untuk dapat hpp_satuan terakhir
+        const { data: hppBulan } = await supabase
+          .from('hpp')
+          .select('nama_produk, hpp_satuan, tanggal')
+          .lte('tanggal', endDateStr)
+          .order('tanggal', { ascending: true })
+
+        // Fetch pengeluaran bulan ini
+        const { data: penBulan } = await supabase
+          .from('pengeluaran')
+          .select('jumlah')
+          .gte('tanggal', startDateStr)
+          .lte('tanggal', endDateStr)
+
+        // Hitung hpp_satuan terakhir per produk
+        const hppMap: Record<string, number> = {}
+        ;(hppBulan || []).forEach((h: any) => {
+          hppMap[h.nama_produk] = h.hpp_satuan
+        })
+
+        // Hitung omzet dari detail
+        const omzetBulan = (detailBulan || []).reduce((a: number, d: any) => {
+          return a + (d.subtotal || d.qty * d.harga || 0)
+        }, 0)
+
+        // Hitung HPP dari detail × hpp_satuan
+        const hppTotal = (detailBulan || []).reduce((a: number, d: any) => {
+          return a + (d.qty * (hppMap[d.nama_produk] || 0))
+        }, 0)
+
+        // Hitung pengeluaran
+        const opex = (penBulan || []).reduce((a: number, p: any) => a + p.jumlah, 0)
+
+        // Laba bersih
+        const laba = omzetBulan - hppTotal - opex
+
         results.push({
           label: `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getFullYear().toString().slice(2)}`,
-          omzet: omzetMonth, hpp: hppMonth, laba: labaMonth
+          laba
         })
       }
+
       setMonthlyTrendData(results)
     }
     fetchTrend()
@@ -1019,7 +1073,7 @@ export default function LaporanPage() {
                 {/* ── Chart Laba: 12 bulan terakhir ── */}
                 <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl p-5">
                   <h4 className="text-sm font-bold text-white mb-1">📊 Tren 12 Bulan Terakhir</h4>
-                  <p className="text-xs text-gray-500 mb-4">Omzet, HPP, dan Laba Bersih — tidak terpengaruh filter bulan</p>
+                  <p className="text-xs text-gray-500 mb-4">Laba Bersih per bulan (12 bulan terakhir) — tidak terpengaruh filter bulan</p>
                   {monthlyTrendData.length === 0 ? (
                     <div className="flex items-center justify-center h-[220px]">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500" />
@@ -1031,10 +1085,26 @@ export default function LaporanPage() {
                         <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 11 }} tickLine={false} axisLine={false} />
                         <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={fmtShort} width={44} />
                         <Tooltip content={<CustomTooltip />} />
-                        <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
-                        <Line type="monotone" dataKey="omzet" name="Omzet" stroke="#22c55e" strokeWidth={2} dot={{ r: 3, fill: '#22c55e' }} activeDot={{ r: 5 }} />
-                        <Line type="monotone" dataKey="hpp" name="HPP" stroke="#ef4444" strokeWidth={2} dot={{ r: 3, fill: '#ef4444' }} activeDot={{ r: 5 }} />
-                        <Line type="monotone" dataKey="laba" name="Laba Bersih" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 3, fill: '#3b82f6' }} activeDot={{ r: 5 }} />
+                        <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" />
+                        <Line
+                          type="monotone"
+                          dataKey="laba"
+                          name="Laba Bersih"
+                          stroke="#22c55e"
+                          strokeWidth={2.5}
+                          dot={(props: any) => {
+                            const { cx, cy, payload } = props
+                            return (
+                              <circle
+                                key={`dot-${payload.label}`}
+                                cx={cx} cy={cy} r={4}
+                                fill={payload.laba >= 0 ? '#22c55e' : '#ef4444'}
+                                stroke="none"
+                              />
+                            )
+                          }}
+                          activeDot={{ r: 5 }}
+                        />
                       </LineChart>
                     </ResponsiveContainer>
                   )}

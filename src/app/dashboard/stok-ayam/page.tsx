@@ -27,8 +27,170 @@ type DetailKeluar = {
 }
 type DetailData = { masuk: HPP[]; keluar: DetailKeluar[]; opname: Opname[] }
 
+type KonversiDetail = {
+  arah: 'keluar' | 'masuk'
+  produk_id: number | null
+  nama_produk: string
+  satuan: string
+  qty: number | string
+  hpp_satuan: number
+  total_nilai: number
+}
+
+type KonversiRecord = {
+  id: string
+  tanggal: string
+  tipe: '1to1' | 'manyto1' | '1tomany'
+  catatan: string
+  konversi_stok_detail: {
+    id: string
+    arah: 'keluar' | 'masuk'
+    nama_produk: string
+    satuan: string
+    qty: number
+    hpp_satuan: number
+    total_nilai: number
+  }[]
+}
+
 export default function StokAyamPage() {
-  const [activeTab, setActiveTab] = useState<'stok' | 'hpp' | 'opname'>('stok')
+  const [activeTab, setActiveTab] = useState<'stok' | 'hpp' | 'opname' | 'konversi'>('stok')
+  const [konversiDetailAll, setKonversiDetailAll] = useState<any[]>([])
+
+  // Konversi State
+  const [konversiList, setKonversiList] = useState<KonversiRecord[]>([])
+  const [isKonversiLoading, setIsKonversiLoading] = useState(false)
+  const [isKonversiSubmitting, setIsKonversiSubmitting] = useState(false)
+  
+  const [konversiTanggal, setKonversiTanggal] = useState(new Date().toISOString().split('T')[0])
+  const [konversiTipe, setKonversiTipe] = useState<'1to1' | 'manyto1' | '1tomany'>('1to1')
+  const [konversiCatatan, setKonversiCatatan] = useState('')
+  const [konversiKeluar, setKonversiKeluar] = useState<KonversiDetail[]>([
+    { arah: 'keluar', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }
+  ])
+  const [konversiMasuk, setKonversiMasuk] = useState<KonversiDetail[]>([
+    { arah: 'masuk', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }
+  ])
+  const [expandedKonversi, setExpandedKonversi] = useState<Set<string>>(new Set())
+
+  const fetchKonversi = async () => {
+    setIsKonversiLoading(true)
+    const { data } = await supabase
+      .from('konversi_stok')
+      .select('*, konversi_stok_detail(*)')
+      .order('tanggal', { ascending: false })
+    if (data) setKonversiList(data as KonversiRecord[])
+    setIsKonversiLoading(false)
+  }
+
+  useEffect(() => {
+    if (activeTab === 'konversi') fetchKonversi()
+  }, [activeTab])
+
+  const updateHppMasukFromKeluar = (
+    keluarList = konversiKeluar,
+    masukList = konversiMasuk
+  ) => {
+    const totalNilaiKeluar = keluarList.reduce((a, k) => {
+      return a + ((parseFloat(String(k.qty)) || 0) * k.hpp_satuan)
+    }, 0)
+    const totalQtyMasuk = masukList.reduce((a, m) => a + (parseFloat(String(m.qty)) || 0), 0)
+    const hppMasukPerSatuan = totalQtyMasuk > 0 ? totalNilaiKeluar / totalQtyMasuk : 0
+    const updated = masukList.map(m => ({
+      ...m,
+      hpp_satuan: Math.round(hppMasukPerSatuan),
+      total_nilai: (parseFloat(String(m.qty)) || 0) * Math.round(hppMasukPerSatuan)
+    }))
+    setKonversiMasuk(updated)
+  }
+
+  const updateKeluar = (idx: number, field: string, val: any) => {
+    const updated = [...konversiKeluar]
+    updated[idx] = { ...updated[idx], [field]: val }
+    if (field === 'produk_id') {
+      const produk = produkList.find(p => p.id === parseInt(val))
+      if (produk) {
+        updated[idx].nama_produk = produk.nama
+        updated[idx].satuan = produk.satuan
+        const hppTerakhir = [...hppList].sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime()).find(h => h.produk_id === produk.id)
+        updated[idx].hpp_satuan = hppTerakhir?.hpp_satuan || 0
+      }
+    }
+    const qty = parseFloat(String(updated[idx].qty)) || 0
+    updated[idx].total_nilai = qty * updated[idx].hpp_satuan
+    setKonversiKeluar(updated)
+    updateHppMasukFromKeluar(updated)
+  }
+
+  const updateMasuk = (idx: number, field: string, val: any) => {
+    const updated = [...konversiMasuk]
+    updated[idx] = { ...updated[idx], [field]: val }
+    if (field === 'produk_id') {
+      const produk = produkList.find(p => p.id === parseInt(val))
+      if (produk) {
+        updated[idx].nama_produk = produk.nama
+        updated[idx].satuan = produk.satuan
+      }
+    }
+    updateHppMasukFromKeluar(konversiKeluar, updated)
+  }
+
+  const handleSimpanKonversi = async () => {
+    const invalidKeluar = konversiKeluar.some(k => !k.produk_id || parseFloat(String(k.qty)) <= 0)
+    const invalidMasuk = konversiMasuk.some(m => !m.produk_id || parseFloat(String(m.qty)) <= 0)
+    if (invalidKeluar || invalidMasuk) return alert('Lengkapi semua data produk keluar dan masuk')
+    setIsKonversiSubmitting(true)
+    try {
+      const { data: konversiHeader, error: headerError } = await supabase
+        .from('konversi_stok')
+        .insert({ tanggal: konversiTanggal, tipe: konversiTipe, catatan: konversiCatatan })
+        .select().single()
+      if (headerError) throw headerError
+
+      const allDetails = [
+        ...konversiKeluar.map(k => ({
+          konversi_id: konversiHeader.id, arah: 'keluar' as const,
+          produk_id: k.produk_id, nama_produk: k.nama_produk, satuan: k.satuan,
+          qty: parseFloat(String(k.qty)), hpp_satuan: k.hpp_satuan, total_nilai: k.total_nilai
+        })),
+        ...konversiMasuk.map(m => ({
+          konversi_id: konversiHeader.id, arah: 'masuk' as const,
+          produk_id: m.produk_id, nama_produk: m.nama_produk, satuan: m.satuan,
+          qty: parseFloat(String(m.qty)), hpp_satuan: m.hpp_satuan, total_nilai: m.total_nilai
+        }))
+      ]
+      const { error: detailError } = await supabase.from('konversi_stok_detail').insert(allDetails)
+      if (detailError) throw detailError
+
+      alert('Konversi berhasil disimpan!')
+      setKonversiKeluar([{ arah: 'keluar', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])
+      setKonversiMasuk([{ arah: 'masuk', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])
+      setKonversiCatatan('')
+      setKonversiTipe('1to1')
+      fetchKonversi()
+      fetchAll()
+    } catch (err: any) {
+      alert('Gagal simpan konversi: ' + err.message)
+    } finally {
+      setIsKonversiSubmitting(false)
+    }
+  }
+
+  const handleHapusKonversi = async (id: string) => {
+    if (!confirm('Yakin hapus konversi ini? Stok akan dikembalikan ke kondisi sebelum konversi.')) return
+    await supabase.from('konversi_stok').delete().eq('id', id)
+    fetchKonversi()
+    fetchAll()
+  }
+
+  const toggleExpandedKonversi = (id: string) => {
+    setExpandedKonversi(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(id)) newSet.delete(id)
+      else newSet.add(id)
+      return newSet
+    })
+  }
   const [produkList, setProdukList] = useState<Produk[]>([])
   const [supplierList, setSupplierList] = useState<Supplier[]>([])
   const [hppList, setHppList] = useState<HPP[]>([])
@@ -96,13 +258,14 @@ export default function StokAyamPage() {
   const fetchAll = async () => {
     setIsLoading(true)
     try {
-      const [p, s, h, sa, o, td] = await Promise.all([
+      const [p, s, h, sa, o, td, ksd] = await Promise.all([
         supabase.from('produk').select('*').eq('aktif', true).order('nama'),
         supabase.from('supplier').select('id, nama').order('nama'),
         supabase.from('hpp').select('*').order('tanggal', { ascending: false }),
         supabase.from('stok_awal').select('*'),
         supabase.from('opname').select('*').order('tanggal', { ascending: false }),
-        supabase.from('transaksi_detail').select('nama_produk, qty')
+        supabase.from('transaksi_detail').select('nama_produk, qty'),
+        supabase.from('konversi_stok_detail').select('*')
       ])
       if (p.data) setProdukList(p.data)
       if (s.data) setSupplierList(s.data)
@@ -110,6 +273,7 @@ export default function StokAyamPage() {
       if (sa.data) setStokAwalList(sa.data)
       if (o.data) setOpnameList(o.data)
       if (td.data) setTransaksiDetail(td.data)
+      if (ksd.data) setKonversiDetailAll(ksd.data)
     } catch (e) { console.error(e) }
     finally { setIsLoading(false) }
   }
@@ -121,12 +285,13 @@ export default function StokAyamPage() {
       const sa = stokAwalList.find(s => s.produk_id === produk.id)
       const stok_awal = sa?.qty || 0
       const total_masuk = hppList.filter(h => h.produk_id === produk.id).reduce((acc, h) => acc + h.qty, 0)
-      const total_keluar = transaksiDetail.filter(t => t.nama_produk === produk.nama).reduce((acc, t) => acc + t.qty, 0)
+      const konv_keluar = konversiDetailAll.filter(d => d.arah === 'keluar' && d.produk_id === produk.id).reduce((acc, d) => acc + d.qty, 0)
+      const total_keluar = transaksiDetail.filter(t => t.nama_produk === produk.nama).reduce((acc, t) => acc + t.qty, 0) + konv_keluar
       const koreksi_opname = opnameList.filter(o => o.produk_id === produk.id).reduce((acc, o) => acc + o.selisih, 0)
       const stok_akhir = stok_awal + total_masuk - total_keluar + koreksi_opname
       return { produk_id: produk.id, nama_produk: produk.nama, satuan: produk.satuan, stok_awal, total_masuk, total_keluar, koreksi_opname, stok_akhir }
     })
-  }, [produkList, stokAwalList, hppList, transaksiDetail, opnameList])
+  }, [produkList, stokAwalList, hppList, transaksiDetail, opnameList, konversiDetailAll])
 
   // Latest HPP per produk (hppList is sorted DESC by tanggal)
   const hppLatestPerProduk = useMemo(() => {
@@ -332,12 +497,12 @@ export default function StokAyamPage() {
           </div>
         </div>
 
-        <div className="flex gap-2 border-b border-white/[0.05]">
-          {[{ key: 'stok', label: '📦 Stok Saat Ini' }, { key: 'hpp', label: '🛒 Input HPP' }, { key: 'opname', label: '📋 Opname' }]
+        <div className="flex gap-2 border-b border-white/[0.05] overflow-x-auto">
+          {[{ key: 'stok', label: '📦 Stok Saat Ini' }, { key: 'hpp', label: '🛒 Input HPP' }, { key: 'opname', label: '📋 Opname' }, { key: 'konversi', label: '🔄 Konversi' }]
             .filter(tab => role === 'kasir' ? tab.key === 'stok' : true)
             .map(tab => (
             <button key={tab.key} onClick={() => setActiveTab(tab.key as any)}
-              className={`px-5 py-3 text-sm font-semibold rounded-t-xl transition-colors ${activeTab === tab.key ? 'bg-[#161b22] text-white border border-b-0 border-white/10' : 'text-gray-500 hover:text-gray-300'}`}>
+              className={`px-5 py-3 text-sm font-semibold rounded-t-xl transition-colors whitespace-nowrap ${activeTab === tab.key ? 'bg-[#161b22] text-white border border-b-0 border-white/10' : 'text-gray-500 hover:text-gray-300'}`}>
               {tab.label}
             </button>
           ))}
@@ -606,6 +771,235 @@ export default function StokAyamPage() {
                     ))}
                   </tbody>
                 </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* KONVERSI TAB */}
+        {activeTab === 'konversi' && (
+          <div className="space-y-6">
+            {/* FORM INPUT */}
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 space-y-5">
+              <h3 className="text-white font-bold text-lg">🔄 Input Konversi Produk</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-gray-400 text-sm">Tanggal</label>
+                  <input type="date" value={konversiTanggal} onChange={e => setKonversiTanggal(e.target.value)}
+                    onClick={e => (e.target as HTMLInputElement).showPicker?.()}
+                    className="w-full bg-[#0d1117] border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50 cursor-pointer [&::-webkit-calendar-picker-indicator]:invert" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-gray-400 text-sm">Tipe Konversi</label>
+                  <select value={konversiTipe} onChange={e => {
+                    setKonversiTipe(e.target.value as any)
+                    if (e.target.value === '1to1') {
+                      setKonversiKeluar([{ arah: 'keluar', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])
+                      setKonversiMasuk([{ arah: 'masuk', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])
+                    }
+                  }} className="w-full bg-[#0d1117] border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50 cursor-pointer">
+                    <option value="1to1">1 → 1 (Tukar Produk)</option>
+                    <option value="manyto1">Banyak → 1 (Gabung jadi 1)</option>
+                    <option value="1tomany">1 → Banyak (Pisah jadi beberapa)</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-gray-400 text-sm">Catatan</label>
+                  <input type="text" value={konversiCatatan} onChange={e => setKonversiCatatan(e.target.value)}
+                    placeholder="Alasan konversi..."
+                    className="w-full bg-[#0d1117] border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6">
+                {/* KOLOM KIRI — PRODUK KELUAR */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-red-400 font-semibold text-sm">📤 Produk Keluar</h4>
+                    {konversiTipe === 'manyto1' && (
+                      <button onClick={() => setKonversiKeluar([...konversiKeluar, { arah: 'keluar', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])}
+                        className="text-xs text-green-400 hover:text-green-300 border border-green-500/20 px-2 py-1 rounded-lg">+ Tambah</button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-[1fr_80px_90px_80px] gap-2 px-1">
+                    <span className="text-xs text-gray-500">Produk</span>
+                    <span className="text-xs text-gray-500 text-right">Qty</span>
+                    <span className="text-xs text-gray-500 text-right">HPP/Sat</span>
+                    <span className="text-xs text-gray-500 text-right">Total</span>
+                  </div>
+                  {konversiKeluar.map((item, idx) => (
+                    <div key={idx} className="grid grid-cols-[1fr_80px_90px_80px] gap-2 items-center bg-[#0d1117] p-2 rounded-xl border border-red-500/10">
+                      <select value={item.produk_id || ''} onChange={e => updateKeluar(idx, 'produk_id', e.target.value)}
+                        className="w-full bg-[#161b22] border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none">
+                        <option value="">Pilih...</option>
+                        {produkList.map(p => <option key={p.id} value={p.id}>{p.nama}</option>)}
+                      </select>
+                      <input type="number" min="0" step="0.1"
+                        value={item.qty === 0 ? '' : item.qty}
+                        onChange={e => updateKeluar(idx, 'qty', e.target.value)}
+                        onWheel={e => (e.target as HTMLInputElement).blur()}
+                        placeholder="0"
+                        className="w-full bg-[#161b22] border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white text-right focus:outline-none" />
+                      <div className="text-xs text-gray-400 text-right font-mono">
+                        {item.hpp_satuan > 0 ? `${(item.hpp_satuan / 1000).toFixed(0)}rb` : '-'}
+                      </div>
+                      <div className="text-xs text-red-400 text-right font-medium">
+                        {item.total_nilai > 0 ? `${(item.total_nilai / 1000).toFixed(0)}rb` : '-'}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex justify-between items-center px-2 pt-1 border-t border-white/5">
+                    <span className="text-xs text-gray-500">Total Nilai Keluar</span>
+                    <span className="text-sm font-bold text-red-400">{formatRp(konversiKeluar.reduce((a, k) => a + k.total_nilai, 0))}</span>
+                  </div>
+                </div>
+
+                {/* KOLOM KANAN — PRODUK MASUK */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-green-400 font-semibold text-sm">📥 Produk Masuk</h4>
+                    {konversiTipe === '1tomany' && (
+                      <button onClick={() => setKonversiMasuk([...konversiMasuk, { arah: 'masuk', produk_id: null, nama_produk: '', satuan: '', qty: '', hpp_satuan: 0, total_nilai: 0 }])}
+                        className="text-xs text-green-400 hover:text-green-300 border border-green-500/20 px-2 py-1 rounded-lg">+ Tambah</button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-[1fr_80px_90px_80px] gap-2 px-1">
+                    <span className="text-xs text-gray-500">Produk</span>
+                    <span className="text-xs text-gray-500 text-right">Qty</span>
+                    <span className="text-xs text-gray-500 text-right">HPP/Sat</span>
+                    <span className="text-xs text-gray-500 text-right">Total</span>
+                  </div>
+                  {konversiMasuk.map((item, idx) => (
+                    <div key={idx} className="grid grid-cols-[1fr_80px_90px_80px] gap-2 items-center bg-[#0d1117] p-2 rounded-xl border border-green-500/10">
+                      <select value={item.produk_id || ''} onChange={e => updateMasuk(idx, 'produk_id', e.target.value)}
+                        className="w-full bg-[#161b22] border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white focus:outline-none">
+                        <option value="">Pilih...</option>
+                        {produkList.map(p => <option key={p.id} value={p.id}>{p.nama}</option>)}
+                      </select>
+                      <input type="number" min="0" step="0.1"
+                        value={item.qty === 0 ? '' : item.qty}
+                        onChange={e => updateMasuk(idx, 'qty', e.target.value)}
+                        onWheel={e => (e.target as HTMLInputElement).blur()}
+                        placeholder="0"
+                        className="w-full bg-[#161b22] border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white text-right focus:outline-none" />
+                      <div className="text-xs text-green-400/70 text-right font-mono">
+                        {item.hpp_satuan > 0 ? `${(item.hpp_satuan / 1000).toFixed(0)}rb` : '-'}
+                      </div>
+                      <div className="text-xs text-green-400 text-right font-medium">
+                        {item.total_nilai > 0 ? `${(item.total_nilai / 1000).toFixed(0)}rb` : '-'}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl px-3 py-2">
+                    <p className="text-blue-400 text-xs">💡 HPP produk masuk dihitung otomatis dari total nilai keluar ÷ total qty masuk</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button onClick={handleSimpanKonversi} disabled={isKonversiSubmitting}
+                  className="bg-green-600 hover:bg-green-500 text-white font-semibold px-6 py-2.5 rounded-xl text-sm disabled:opacity-50 transition-colors">
+                  {isKonversiSubmitting ? 'Menyimpan...' : '💾 Simpan Konversi'}
+                </button>
+              </div>
+            </div>
+
+            {/* RIWAYAT KONVERSI */}
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-white/[0.06] flex items-center justify-between">
+                <h3 className="text-white font-bold text-lg">📋 Riwayat Konversi</h3>
+                {isKonversiLoading && <div className="w-4 h-4 rounded-full border-2 border-t-green-500 animate-spin" />}
+              </div>
+              {konversiList.length === 0 ? (
+                <div className="p-12 text-center text-gray-500">
+                  <span className="text-4xl block mb-3 opacity-40">🔄</span>
+                  Belum ada riwayat konversi
+                </div>
+              ) : (
+                <div className="divide-y divide-white/[0.04]">
+                  {konversiList.map(k => {
+                    const keluarItems = k.konversi_stok_detail.filter(d => d.arah === 'keluar')
+                    const masukItems = k.konversi_stok_detail.filter(d => d.arah === 'masuk')
+                    const isExpanded = expandedKonversi.has(k.id)
+                    const tipeLabel = k.tipe === '1to1' ? '1→1' : k.tipe === 'manyto1' ? 'Banyak→1' : '1→Banyak'
+                    const tipeBadge = k.tipe === '1to1' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                      : k.tipe === 'manyto1' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                      : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+                    return (
+                      <div key={k.id} className="hover:bg-white/[0.01] transition-colors">
+                        <div className="flex items-center gap-4 px-6 py-4">
+                          <div className="text-sm text-gray-400 w-28 shrink-0">
+                            {new Date(k.tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium shrink-0 ${tipeBadge}`}>{tipeLabel}</span>
+                          <div className="flex-1 flex items-center gap-2 min-w-0">
+                            <span className="text-red-400 text-sm truncate">{keluarItems.map(d => `${d.nama_produk} (${d.qty} ${d.satuan})`).join(' + ')}</span>
+                            <span className="text-gray-500 shrink-0">→</span>
+                            <span className="text-green-400 text-sm truncate">{masukItems.map(d => `${d.nama_produk} (${d.qty} ${d.satuan})`).join(' + ')}</span>
+                          </div>
+                          {k.catatan && <span className="text-xs text-gray-500 italic shrink-0 max-w-[150px] truncate" title={k.catatan}>{k.catatan}</span>}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button onClick={() => toggleExpandedKonversi(k.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition-colors">
+                              {isExpanded ? '▲ Tutup' : '▼ Detail'}
+                            </button>
+                            <button onClick={() => handleHapusKonversi(k.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+                              🗑️ Hapus
+                            </button>
+                          </div>
+                        </div>
+                        {isExpanded && (
+                          <div className="px-6 pb-4">
+                            <div className="bg-[#0d1117] rounded-xl border border-white/5 overflow-hidden">
+                              <table className="w-full text-sm">
+                                <thead className="border-b border-white/5 bg-white/[0.02]">
+                                  <tr>
+                                    <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase">Arah</th>
+                                    <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase">Produk</th>
+                                    <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase">Qty</th>
+                                    <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase">HPP/Sat</th>
+                                    <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase">Total Nilai</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/[0.03]">
+                                  {k.konversi_stok_detail.map((d, i) => (
+                                    <tr key={i} className="hover:bg-white/[0.01]">
+                                      <td className="px-4 py-2">
+                                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${d.arah === 'keluar' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'}`}>
+                                          {d.arah === 'keluar' ? '📤 Keluar' : '📥 Masuk'}
+                                        </span>
+                                      </td>
+                                      <td className="px-4 py-2 text-white font-medium">{d.nama_produk}</td>
+                                      <td className="px-4 py-2 text-right text-gray-300">{d.qty} {d.satuan}</td>
+                                      <td className="px-4 py-2 text-right text-gray-300">{formatRp(d.hpp_satuan)}</td>
+                                      <td className={`px-4 py-2 text-right font-semibold ${d.arah === 'keluar' ? 'text-red-400' : 'text-green-400'}`}>
+                                        {d.arah === 'keluar' ? '-' : '+'}{formatRp(d.total_nilai)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot className="border-t border-white/10 bg-white/[0.02]">
+                                  <tr>
+                                    <td colSpan={4} className="px-4 py-2 text-xs text-gray-500">Selisih nilai (jika ada) masuk sebagai penyesuaian stok</td>
+                                    <td className="px-4 py-2 text-right text-xs text-gray-400">
+                                      {(() => {
+                                        const totalKeluar = k.konversi_stok_detail.filter(d => d.arah === 'keluar').reduce((a, d) => a + d.total_nilai, 0)
+                                        const totalMasuk = k.konversi_stok_detail.filter(d => d.arah === 'masuk').reduce((a, d) => a + d.total_nilai, 0)
+                                        const selisih = totalMasuk - totalKeluar
+                                        return selisih === 0 ? '✅ Seimbang' : `Selisih: ${formatRp(Math.abs(selisih))}`
+                                      })()}
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </div>
           </div>
