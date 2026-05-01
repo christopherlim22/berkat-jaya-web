@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { fetchAllRows } from "@/lib/fetchAll"
+import { buildLayersAtDate, hitungHPPFIFO } from "@/lib/fifo"
 import { Calendar, DollarSign, Package, Users, Banknote, CreditCard, Wallet, TrendingUp } from "lucide-react"
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -107,6 +109,10 @@ export default function LaporanPage() {
   const [detailAllList, setDetailAllList] = useState<DetailWithDate[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
+  const [stokAwalMap, setStokAwalMap] = useState<Record<string, { qty: number; hpp_satuan: number; tanggal: string }>>({})
+  const [konversiDetailAll, setKonversiDetailAll] = useState<any[]>([])
+  const [transaksiDetailAll, setTransaksiDetailAll] = useState<any[]>([])
+
   // Arus Kas State
   const [kasMasukList, setKasMasukList] = useState<KasMasukItem[]>([])
   const [kasKeluarList, setKasKeluarList] = useState<KasKeluarItem[]>([])
@@ -135,43 +141,78 @@ export default function LaporanPage() {
 
   useEffect(() => {
     const fetchData = async () => {
-      setIsLoading(true)
+      try {
+        setIsLoading(true)
 
-      const mm = String(selectedMonth + 1).padStart(2, '0')
-      const startStr = `${selectedYear}-${mm}-01`
-      const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
-      const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, '0')}`
-      const startDateTimeStr = `${startStr}T00:00:00`
-      const endDateTimeStr = `${endStr}T23:59:59.999`
+        const mm = String(selectedMonth + 1).padStart(2, '0')
+        const startStr = `${selectedYear}-${mm}-01`
+        const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
+        const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, '0')}`
+        const startDateTimeStr = `${startStr}T00:00:00`
+        const endDateTimeStr = `${endStr}T23:59:59.999`
 
-      const [trxRes, pengeluaranRes, hppRes, produkRes, hppAllRes, opnameAllRes, detailAllRes] = await Promise.all([
-        supabase.from("transaksi").select("*").gte("tanggal", startDateTimeStr).lte("tanggal", endDateTimeStr),
-        supabase.from("pengeluaran").select("*").gte("tanggal", startStr).lte("tanggal", endStr).order("tanggal", { ascending: false }),
-        supabase.from("hpp").select("id, tanggal, total_modal").gte("tanggal", startStr).lte("tanggal", endStr),
-        supabase.from("produk").select("id, nama, stok_awal"),
-        supabase.from("hpp").select("id, tanggal, nama_produk, qty, hpp_satuan, total_modal").order("tanggal", { ascending: true }),
-        supabase.from("opname").select("id, tanggal, nama_produk, selisih").order("tanggal", { ascending: true }),
-        supabase.from("transaksi_detail").select("nama_produk, qty, transaksi!inner(tanggal)"),
-      ])
+        const [trxDataPeriode, pengeluaranData, produkRes, hppAllData, opnameAllData, detailAllRaw, trxAllRaw, konversiDetailAllData] = await Promise.all([
+          fetchAllRows("transaksi", "*", { gte: ["tanggal", startDateTimeStr], lte: ["tanggal", endDateTimeStr] }),
+          fetchAllRows("pengeluaran", "*", { gte: ["tanggal", startStr], lte: ["tanggal", endStr], order: ["tanggal", false] }),
+          supabase.from("produk").select("id, nama, stok_awal"),
+          fetchAllRows("hpp", "id, tanggal, nama_produk, qty, hpp_satuan, total_modal", { order: ["tanggal", true] }),
+          fetchAllRows("opname", "id, tanggal, nama_produk, selisih", { order: ["tanggal", true] }),
+          fetchAllRows('transaksi_detail', 'transaksi_id, nama_produk, qty, harga, subtotal'),
+          fetchAllRows('transaksi', 'id, tanggal, nama_pembeli, jenis_pembayaran, total'),
+          fetchAllRows('konversi_stok_detail', '*, konversi_stok(tanggal)'),
+        ])
 
-      const trxData = trxRes.data as Transaksi[] || []
-      setTransaksi(trxData)
-      if (pengeluaranRes.data) setPengeluaran(pengeluaranRes.data as Pengeluaran[])
-      if (hppRes.data) setHppList(hppRes.data as HPP[])
-      if (produkRes.data) setProdukList(produkRes.data as ProdukRow[])
-      if (hppAllRes.data) setHppAllList(hppAllRes.data as HPPFull[])
-      if (opnameAllRes.data) setOpnameAllList(opnameAllRes.data as OpnameRecord[])
-      if (detailAllRes.data) setDetailAllList(detailAllRes.data as unknown as DetailWithDate[])
+        const safeTrxAll = trxAllRaw || []
+        const safeDetailRaw = detailAllRaw || []
 
-      const { data: detailData } = await supabase
-        .from('transaksi_detail')
-        .select('*, transaksi!inner(tanggal, nama_pembeli)')
-        .gte('transaksi.tanggal', startDateTimeStr)
-        .lte('transaksi.tanggal', endDateTimeStr)
+        // Build map transaksi by id
+        const trxMap = Object.fromEntries(safeTrxAll.map(t => [t.id, t]))
 
-      setTransaksiDetail(detailData as TransaksiDetail[] || [])
+        // Gabungkan transaksi_detail dengan data transaksi (tanggal)
+        const detailAllData = safeDetailRaw.map(d => ({
+          ...d,
+          transaksi: trxMap[d.transaksi_id] || null
+        }))
 
-      setIsLoading(false)
+        setTransaksi(trxDataPeriode || [])
+        setPengeluaran(pengeluaranData || [])
+        if (produkRes.data) setProdukList(produkRes.data || [])
+        setHppAllList(hppAllData || [])
+        setOpnameAllList(opnameAllData || [])
+
+        const hppPeriode = (hppAllData || []).filter(h => h.tanggal >= startStr && h.tanggal <= endStr)
+        setHppList(hppPeriode)
+
+        const transaksiDetailPeriode = detailAllData.filter(d => {
+          const tgl = d.transaksi?.tanggal
+          return tgl && new Date(tgl) >= new Date(startDateTimeStr) && new Date(tgl) <= new Date(endDateTimeStr)
+        })
+        
+        setTransaksiDetail(transaksiDetailPeriode || [])
+        setDetailAllList(detailAllData as unknown as DetailWithDate[])
+
+        const saMap: Record<string, { qty: number; hpp_satuan: number; tanggal: string }> = {}
+        if (produkRes.data) {
+          produkRes.data.forEach((p: any) => {
+            const hppPertama = (hppAllData || [])
+              .filter(h => h.nama_produk === p.nama)
+              .sort((a: any, b: any) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime())[0]
+            saMap[p.nama] = {
+              qty: p.stok_awal || 0,
+              hpp_satuan: hppPertama?.hpp_satuan || 0,
+              tanggal: '2026-03-30'
+            }
+          })
+        }
+
+        setStokAwalMap(saMap)
+        setKonversiDetailAll(konversiDetailAllData || [])
+        setTransaksiDetailAll(detailAllData)
+      } catch (error) {
+        console.error("Error fetching data:", error)
+      } finally {
+        setIsLoading(false)
+      }
     }
 
     fetchData()
@@ -193,37 +234,33 @@ export default function LaporanPage() {
         const startDateTimeStr = `${startStr}T00:00:00`
         const endDateTimeStr = `${endStr}T23:59:59.999`
 
-        const [trxRes, piutangRes, pengeluaranRes, utangRes] = await Promise.all([
-          supabase
-            .from("transaksi")
-            .select("tanggal, jenis_pembayaran, total, no_nota, nama_pembeli")
-            .in("jenis_pembayaran", ["Tunai", "Transfer"])
-            .gte("tanggal", startDateTimeStr)
-            .lte("tanggal", endDateTimeStr)
-            .order("tanggal", { ascending: true }),
-          supabase
-            .from("piutang")
-            .select("tanggal_lunas, terbayar, nama_pembeli, no_nota, metode_bayar")
-            .eq("status", "lunas")
-            .gte("tanggal_lunas", startStr)
-            .lte("tanggal_lunas", endStr),
-          supabase
-            .from("pengeluaran")
-            .select("*")
-            .gte("tanggal", startStr)
-            .lte("tanggal", endStr)
-            .order("tanggal", { ascending: true }),
-          supabase
-            .from("utang_supplier")
-            .select("tanggal_lunas, terbayar, nama_supplier")
-            .eq("status", "lunas")
-            .gte("tanggal_lunas", startStr)
-            .lte("tanggal_lunas", endStr),
+        const [trxData, piutangData, pengeluaranData, utangData] = await Promise.all([
+          fetchAllRows("transaksi", "tanggal, jenis_pembayaran, total, no_nota, nama_pembeli", {
+            in: [["jenis_pembayaran", ["Tunai", "Transfer"]]],
+            gte: ["tanggal", startDateTimeStr],
+            lte: ["tanggal", endDateTimeStr],
+            order: ["tanggal", true]
+          }),
+          fetchAllRows("piutang", "tanggal_lunas, terbayar, nama_pembeli, no_nota, metode_bayar", {
+            eq: [["status", "lunas"]],
+            gte: ["tanggal_lunas", startStr],
+            lte: ["tanggal_lunas", endStr]
+          }),
+          fetchAllRows("pengeluaran", "*", {
+            gte: ["tanggal", startStr],
+            lte: ["tanggal", endStr],
+            order: ["tanggal", true]
+          }),
+          fetchAllRows("utang_supplier", "tanggal_lunas, terbayar, nama_supplier", {
+            eq: [["status", "lunas"]],
+            gte: ["tanggal_lunas", startStr],
+            lte: ["tanggal_lunas", endStr]
+          }),
         ])
 
         const masuk: KasMasukItem[] = []
-        if (trxRes.data) {
-          trxRes.data.forEach((tx: any) => {
+        if (trxData) {
+          trxData.forEach((tx: any) => {
             masuk.push({
               tanggal: tx.tanggal.split("T")[0],
               keterangan: `${tx.nama_pembeli} – ${tx.no_nota}`,
@@ -232,8 +269,8 @@ export default function LaporanPage() {
             })
           })
         }
-        if (piutangRes.data) {
-          piutangRes.data.forEach((p: any) => {
+        if (piutangData) {
+          piutangData.forEach((p: any) => {
             if ((p.terbayar ?? 0) > 0) {
               const piutangKategori = p.metode_bayar === 'Transfer' ? 'Transfer (Piutang)' : 'Tunai (Piutang)'
               masuk.push({
@@ -249,8 +286,8 @@ export default function LaporanPage() {
         setKasMasukList(masuk)
 
         const keluar: KasKeluarItem[] = []
-        if (pengeluaranRes.data) {
-          pengeluaranRes.data.forEach((p: any) => {
+        if (pengeluaranData) {
+          pengeluaranData.forEach((p: any) => {
             keluar.push({
               tanggal: p.tanggal,
               keterangan: p.keterangan || p.sub_kategori || p.kategori,
@@ -259,8 +296,8 @@ export default function LaporanPage() {
             })
           })
         }
-        if (utangRes.data) {
-          utangRes.data.forEach((u: any) => {
+        if (utangData) {
+          utangData.forEach((u: any) => {
             if ((u.terbayar ?? 0) > 0) {
               keluar.push({
                 tanggal: u.tanggal_lunas,
@@ -314,24 +351,24 @@ export default function LaporanPage() {
         setNeracaModalUsaha(cMap['neraca_modal_usaha'] || 0)
 
         // 2. Piutang Usaha
-        const { data: piutangData } = await supabase.from('piutang').select('sisa').eq('status', 'belum lunas').lte('tanggal', endIso)
-        setTotalPiutangNeraca((piutangData || []).reduce((acc, curr) => acc + curr.sisa, 0))
+        const piutangData = await fetchAllRows('piutang', 'sisa', { eq: [['status', 'belum lunas']], lte: ['tanggal', endIso] })
+        setTotalPiutangNeraca((piutangData || []).reduce((acc: any, curr: any) => acc + curr.sisa, 0))
 
         // 3. Utang Supplier
-        const { data: utangData } = await supabase.from('utang_supplier').select('sisa').eq('status', 'belum lunas').lte('tanggal', endIso)
-        setTotalUtangNeraca((utangData || []).reduce((acc, curr) => acc + curr.sisa, 0))
+        const utangData = await fetchAllRows('utang_supplier', 'sisa', { eq: [['status', 'belum lunas']], lte: ['tanggal', endIso] })
+        setTotalUtangNeraca((utangData || []).reduce((acc: any, curr: any) => acc + curr.sisa, 0))
 
         // 4. Nilai Stok
-        const [produkRes, hppAllRes, opnameRes, trxDetailRes] = await Promise.all([
+        const [produkRes, hppAllData, opnameData, trxDetailData] = await Promise.all([
           supabase.from('produk').select('id, nama, stok_awal'),
-          supabase.from('hpp').select('nama_produk, qty, hpp_satuan').lte('tanggal', endStr).order('tanggal', { ascending: true }),
-          supabase.from('opname').select('nama_produk, selisih').lte('tanggal', endStr),
-          supabase.from('transaksi_detail').select('nama_produk, qty, transaksi!inner(tanggal)')
+          fetchAllRows('hpp', 'nama_produk, qty, hpp_satuan', { lte: ['tanggal', endStr], order: ['tanggal', true] }),
+          fetchAllRows('opname', 'nama_produk, selisih', { lte: ['tanggal', endStr] }),
+          fetchAllRows('transaksi_detail', 'nama_produk, qty, transaksi!inner(tanggal)')
         ])
         const produkListN = produkRes.data || []
-        const hppListN = hppAllRes.data || []
-        const opnameListN = opnameRes.data || []
-        const detailListN = (trxDetailRes.data || []) as any[]
+        const hppListN = hppAllData || []
+        const opnameListN = opnameData || []
+        const detailListN = (trxDetailData || []) as any[]
         const filteredDetailListN = detailListN.filter(d => {
           const t = d.transaksi
           const dateStr = Array.isArray(t) ? t[0]?.tanggal : t?.tanggal
@@ -357,19 +394,18 @@ export default function LaporanPage() {
         setNilaiStokNeraca(ns)
 
         // 5. Kas Bank
-        const [trxRes, piutangLunasRes, pengeluaranRes, utangLunasRes, hppModalRes] = await Promise.all([
-          supabase.from('transaksi').select('total, jenis_pembayaran').lte('tanggal', endIso),
-          supabase.from('piutang').select('terbayar').eq('status', 'lunas').lte('tanggal_lunas', endStr),
-          supabase.from('pengeluaran').select('jumlah').lte('tanggal', endStr),
-          supabase.from('utang_supplier').select('terbayar').eq('status', 'lunas').lte('tanggal_lunas', endStr),
-          supabase.from('hpp').select('total_modal').lte('tanggal', endStr)
+        const [trxDataN, piutangLunasData, pengeluaranDataN, utangLunasData, hppModalData] = await Promise.all([
+          fetchAllRows('transaksi', 'total, jenis_pembayaran', { lte: ['tanggal', endIso] }),
+          fetchAllRows('piutang', 'terbayar', { eq: [['status', 'lunas']], lte: ['tanggal_lunas', endStr] }),
+          fetchAllRows('pengeluaran', 'jumlah', { lte: ['tanggal', endStr] }),
+          fetchAllRows('utang_supplier', 'terbayar', { eq: [['status', 'lunas']], lte: ['tanggal_lunas', endStr] }),
+          fetchAllRows('hpp', 'total_modal', { lte: ['tanggal', endStr] })
         ])
 
-        const trxDataN = trxRes.data || []
-        const kasKeluarPengeluaran = (pengeluaranRes.data || []).reduce((a, p) => a + p.jumlah, 0)
+        const kasKeluarPengeluaran = (pengeluaranDataN || []).reduce((a: any, p: any) => a + p.jumlah, 0)
 
-        const totalOmzet = trxDataN.reduce((a, t) => a + t.total, 0)
-        const totalHPP = (hppModalRes.data || []).reduce((a, h) => a + h.total_modal, 0)
+        const totalOmzet = (trxDataN || []).reduce((a: any, t: any) => a + t.total, 0)
+        const totalHPP = (hppModalData || []).reduce((a: any, h: any) => a + h.total_modal, 0)
         setLabaBersihKumulatif(totalOmzet - totalHPP - kasKeluarPengeluaran)
       } catch (err) {
         console.error("Neraca fetch error:", err)
@@ -427,46 +463,58 @@ export default function LaporanPage() {
   }, [pengeluaran])
 
   // Laba
-  const totalHPP = useMemo(() => hppList.reduce((acc, h) => acc + h.total_modal, 0), [hppList])
+  const startDate = useMemo(() => new Date(selectedYear, selectedMonth, 1), [selectedYear, selectedMonth])
+  const endDate = useMemo(() => new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59, 999), [selectedYear, selectedMonth])
 
   const cogsData = useMemo(() => {
-    // HPP = sum(qty_terjual × hpp_satuan) per produk
-    // Ambil dari transaksi_detail bulan ini × hpp_satuan terakhir per produk
-
-    // hppSatuanMap: hpp satuan terakhir per produk dari hppAllList
-    const hppSatuanMap: Record<string, number> = {}
-    hppAllList.forEach(h => {
-      hppSatuanMap[h.nama_produk] = h.hpp_satuan
-    })
-
-    // Hitung qty terjual per produk dari transaksiDetail bulan ini
     const qtySoldMap: Record<string, number> = {}
     transaksiDetail.forEach(td => {
       qtySoldMap[td.nama_produk] = (qtySoldMap[td.nama_produk] || 0) + td.qty
     })
 
-    // Hitung total HPP = sum(qty_terjual × hpp_satuan)
     let totalCOGS = 0
-    const breakdown: { nama: string; qty: number; hpp_satuan: number; total: number }[] = []
+    const breakdown: { nama: string; qty: number; hpp_satuan_fifo: number; total: number }[] = []
 
     Object.entries(qtySoldMap).forEach(([nama, qty]) => {
-      const hpp_satuan = hppSatuanMap[nama] || 0
-      const total = qty * hpp_satuan
-      totalCOGS += total
-      if (hpp_satuan > 0) {
-        breakdown.push({ nama, qty, hpp_satuan, total })
-      }
+      const layersAtStart = buildLayersAtDate(
+        hppAllList,
+        transaksiDetailAll,
+        konversiDetailAll,
+        stokAwalMap,
+        nama,
+        startDate
+      )
+
+      hppAllList
+        .filter(h => h.nama_produk === nama && new Date(h.tanggal) >= startDate && new Date(h.tanggal) <= endDate)
+        .sort((a, b) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime())
+        .forEach(h => {
+          layersAtStart.push({
+            tanggal: h.tanggal,
+            qty_awal: h.qty,
+            qty_sisa: h.qty,
+            hpp_satuan: h.hpp_satuan
+          })
+        })
+
+      const fifoResult = hitungHPPFIFO(layersAtStart, qty)
+      totalCOGS += fifoResult.total_hpp
+      breakdown.push({
+        nama,
+        qty,
+        hpp_satuan_fifo: Math.round(fifoResult.hpp_satuan_weighted),
+        total: fifoResult.total_hpp
+      })
     })
 
     return {
       cogs: totalCOGS,
-      breakdown,
-      // Tetap sediakan nilai ini untuk kompatibilitas display lama
+      breakdown: breakdown.sort((a, b) => b.total - a.total),
       totalNilaiStokAwal: 0,
-      pembelianBulan: hppList.reduce((a, h) => a + h.total_modal, 0),
+      pembelianBulan: hppList.reduce((a: number, h: any) => a + h.total_modal, 0),
       totalNilaiStokAkhir: 0,
     }
-  }, [transaksiDetail, hppAllList, hppList])
+  }, [transaksiDetail, transaksiDetailAll, hppAllList, hppList, konversiDetailAll, stokAwalMap, selectedMonth, selectedYear, startDate, endDate])
 
   const labaKotor = omzet.total - cogsData.cogs
   const labaBersih = labaKotor - totalPengeluaran
@@ -530,8 +578,8 @@ export default function LaporanPage() {
   const totalKewajibanEkuitas = totalKewajiban + totalEkuitas
   const isBalance = Math.abs(totalAset - totalKewajibanEkuitas) < 1
 
-  const endDate = new Date(selectedYear, selectedMonth + 1, 0)
-  const endDateStr = endDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+  const endDateNeraca = new Date(selectedYear, selectedMonth + 1, 0)
+  const endDateStr = endDateNeraca.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
   
   const handleSimpanNeraca = async () => {
     const entries = [
@@ -614,64 +662,49 @@ export default function LaporanPage() {
 
   useEffect(() => {
     const fetchTrend = async () => {
+      if (transaksiDetailAll.length === 0 || hppAllList.length === 0) return
+      
       const results: { label: string; laba: number }[] = []
       const now = new Date()
+      const startYearAwal = new Date(now.getFullYear(), now.getMonth() - 11, 1)
+      const startStrAwal = startYearAwal.toISOString().split('T')[0]
+      
+      // Fetch pengeluaran for the whole 12 months at once
+      const allPen = await fetchAllRows('pengeluaran', 'tanggal, jumlah', { gte: ['tanggal', startStrAwal] })
 
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
         const start = new Date(d.getFullYear(), d.getMonth(), 1)
-        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
-        
-        const mm = String(start.getMonth() + 1).padStart(2, '0')
-        const yy = start.getFullYear()
-        const lastDay = end.getDate()
-        
-        const startDateTimeStr = `${yy}-${mm}-01T00:00:00`
-        const endDateTimeStr = `${yy}-${mm}-${String(lastDay).padStart(2, '0')}T23:59:59.999`
-        const endDateStr = `${yy}-${mm}-${String(lastDay).padStart(2, '0')}`
-        const startDateStr = `${yy}-${mm}-01`
+        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999)
+        const startStr = start.toISOString().split('T')[0]
+        const endStr = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
 
-        // Fetch transaksi_detail bulan ini
-        const { data: detailBulan } = await supabase
-          .from('transaksi_detail')
-          .select('nama_produk, qty, harga, subtotal, transaksi!inner(tanggal)')
-          .gte('transaksi.tanggal', startDateTimeStr)
-          .lte('transaksi.tanggal', endDateTimeStr)
-
-        // Fetch hpp semua s.d. akhir bulan untuk dapat hpp_satuan terakhir
-        const { data: hppBulan } = await supabase
-          .from('hpp')
-          .select('nama_produk, hpp_satuan, tanggal')
-          .lte('tanggal', endDateStr)
-          .order('tanggal', { ascending: true })
-
-        // Fetch pengeluaran bulan ini
-        const { data: penBulan } = await supabase
-          .from('pengeluaran')
-          .select('jumlah')
-          .gte('tanggal', startDateStr)
-          .lte('tanggal', endDateStr)
-
-        // Hitung hpp_satuan terakhir per produk
-        const hppMap: Record<string, number> = {}
-        ;(hppBulan || []).forEach((h: any) => {
-          hppMap[h.nama_produk] = h.hpp_satuan
+        // Filter dari data yang sudah ada
+        const detailBulan = transaksiDetailAll.filter(d => {
+          const tgl = Array.isArray(d.transaksi) ? d.transaksi[0]?.tanggal : d.transaksi?.tanggal
+          return tgl && new Date(tgl) >= start && new Date(tgl) <= end
         })
 
+        const penBulan = allPen.filter(p => p.tanggal >= startStr && p.tanggal <= endStr)
+
         // Hitung omzet dari detail
-        const omzetBulan = (detailBulan || []).reduce((a: number, d: any) => {
-          return a + (d.subtotal || d.qty * d.harga || 0)
-        }, 0)
+        const omzetBulan = detailBulan.reduce((a, d) => a + (d.subtotal || d.qty * d.harga || 0), 0)
 
-        // Hitung HPP dari detail × hpp_satuan
-        const hppTotal = (detailBulan || []).reduce((a: number, d: any) => {
-          return a + (d.qty * (hppMap[d.nama_produk] || 0))
-        }, 0)
+        // Hitung HPP FIFO untuk bulan ini
+        const qtySoldBulan: Record<string, number> = {}
+        detailBulan.forEach(d => { qtySoldBulan[d.nama_produk] = (qtySoldBulan[d.nama_produk] || 0) + d.qty })
 
-        // Hitung pengeluaran
-        const opex = (penBulan || []).reduce((a: number, p: any) => a + p.jumlah, 0)
+        let hppTotal = 0
+        Object.entries(qtySoldBulan).forEach(([nama, qty]) => {
+          const layers = buildLayersAtDate(hppAllList, transaksiDetailAll, konversiDetailAll, stokAwalMap, nama, start)
+          hppAllList
+            .filter(h => h.nama_produk === nama && new Date(h.tanggal) >= start && new Date(h.tanggal) <= end)
+            .forEach(h => layers.push({ tanggal: h.tanggal, qty_awal: h.qty, qty_sisa: h.qty, hpp_satuan: h.hpp_satuan }))
+          const result = hitungHPPFIFO(layers, qty)
+          hppTotal += result.total_hpp
+        })
 
-        // Laba bersih
+        const opex = penBulan.reduce((a, p) => a + p.jumlah, 0)
         const laba = omzetBulan - hppTotal - opex
 
         results.push({
@@ -682,8 +715,11 @@ export default function LaporanPage() {
 
       setMonthlyTrendData(results)
     }
-    fetchTrend()
-  }, [])
+
+    if (transaksiDetailAll.length > 0 && hppAllList.length > 0) {
+      fetchTrend()
+    }
+  }, [transaksiDetailAll, hppAllList, konversiDetailAll, stokAwalMap])
 
   const FilterBar = () => (
     <div className="flex items-center gap-4">
@@ -1191,7 +1227,7 @@ export default function LaporanPage() {
                       {cogsData.breakdown.map((item, i) => (
                         <tr key={i} className="hover:bg-white/[0.01]">
                           <td className="px-6 py-2 pl-10 text-gray-400 text-xs">
-                            → {item.nama} ({item.qty} × {formatRp(item.hpp_satuan)})
+                            → {item.nama} ({item.qty} × {formatRp(item.hpp_satuan_fifo)})
                           </td>
                           <td className="px-6 py-2 text-right text-gray-400 text-xs">
                             {formatRp(item.total)}

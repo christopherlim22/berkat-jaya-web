@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo, useRef } from "react"
 import { supabase } from "@/utils/supabase/client"
 import { getUserRole } from "@/utils/supabase/getUserRole"
+import { fetchAllRows } from "@/lib/fetchAll"
+import { buildLayersAtDate, hitungHPPFIFO } from "@/lib/fifo"
 
 type TransaksiDetail = {
   id: number
@@ -63,8 +65,10 @@ export default function TransaksiPage() {
 
   // Modal
   const [selectedTx, setSelectedTx] = useState<Transaksi | null>(null)
-  const [hppMap, setHppMap] = useState<Record<string, number>>({})
-  const [isHppLoading, setIsHppLoading] = useState(false)
+  const [hppAllForDetail, setHppAllForDetail] = useState<any[]>([])
+  const [transaksiDetailAllForDetail, setTransaksiDetailAllForDetail] = useState<any[]>([])
+  const [stokAwalMapForDetail, setStokAwalMapForDetail] = useState<Record<string, any>>({})
+  const [isFIFOLoading, setIsFIFOLoading] = useState(false)
 
   const detailModalRef = useRef<HTMLDivElement>(null)
   const editModalRef = useRef<HTMLDivElement>(null)
@@ -116,30 +120,49 @@ export default function TransaksiPage() {
   }, [])
 
   useEffect(() => {
-    if (!selectedTx) { setHppMap({}); return }
-    const produkNames = Array.from(new Set((selectedTx.transaksi_detail || []).map(d => d.nama_produk)))
-    if (produkNames.length === 0) return
-    setIsHppLoading(true)
-    Promise.all(
-      produkNames.map(nama =>
-        supabase.from('hpp').select('hpp_satuan').eq('nama_produk', nama).order('tanggal', { ascending: false }).limit(1).single()
-          .then(({ data }) => ({ nama, hpp_satuan: data?.hpp_satuan ?? 0 }))
-      )
-    ).then(results => {
-      const map: Record<string, number> = {}
-      results.forEach(r => { map[r.nama] = r.hpp_satuan })
-      setHppMap(map)
-    }).finally(() => setIsHppLoading(false))
+    if (!selectedTx) return
+    
+    const fetchFIFOData = async () => {
+      setIsFIFOLoading(true)
+      try {
+        const [hppAll, detailRaw, trxRaw, produkData] = await Promise.all([
+          fetchAllRows('hpp', 'nama_produk, qty, hpp_satuan, tanggal', { order: ['tanggal', true] }),
+          fetchAllRows('transaksi_detail', 'transaksi_id, nama_produk, qty'),
+          fetchAllRows('transaksi', 'id, tanggal'),
+          supabase.from('produk').select('nama, stok_awal')
+        ])
+
+        const trxMap = Object.fromEntries(trxRaw.map(t => [t.id, t]))
+        const detailAll = detailRaw.map(d => ({
+          ...d,
+          transaksi: trxMap[d.transaksi_id] || null
+        }))
+
+        const saMap: Record<string, any> = {}
+        if (produkData.data) {
+          produkData.data.forEach((p: any) => {
+            const hppPertama = hppAll.filter((h: any) => h.nama_produk === p.nama).sort((a: any, b: any) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime())[0]
+            saMap[p.nama] = { qty: p.stok_awal || 0, hpp_satuan: hppPertama?.hpp_satuan || 0, tanggal: '2026-03-30' }
+          })
+        }
+
+        setHppAllForDetail(hppAll)
+        setTransaksiDetailAllForDetail(detailAll)
+        setStokAwalMapForDetail(saMap)
+      } catch (err) {
+        console.error("Error fetching FIFO data:", err)
+      } finally {
+        setIsFIFOLoading(false)
+      }
+    }
+    
+    fetchFIFOData()
   }, [selectedTx])
 
   const fetchTransactions = async () => {
     setIsLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('transaksi')
-        .select(`*, transaksi_detail (*)`)
-        .order('tanggal', { ascending: false })
-      if (error) { console.error(error); return }
+      const data = await fetchAllRows('transaksi', '*, transaksi_detail(*)', { order: ['tanggal', false] })
       setTransactions(data as Transaksi[])
     } catch (err) { console.error(err) }
     finally { setIsLoading(false) }
@@ -263,9 +286,12 @@ export default function TransaksiPage() {
     })
   }, [transactions, filterMode, dateFilter, bulanFilter, tahunFilter, paymentFilter, searchQuery])
 
-  const totalOmzet = useMemo(() =>
-    filteredTransactions.reduce((acc, tx) => acc + (tx.total || 0), 0),
-    [filteredTransactions])
+  const totalOmzet = useMemo(() => {
+    return filteredTransactions.reduce((acc, tx) => {
+      const detailSum = (tx.transaksi_detail || []).reduce((a, td) => a + (td.subtotal || td.qty * td.harga || 0), 0)
+      return acc + detailSum
+    }, 0)
+  }, [filteredTransactions])
 
   const omzetTunai = useMemo(() =>
     filteredTransactions.filter(tx => tx.jenis_pembayaran === 'Tunai').reduce((acc, tx) => acc + tx.total, 0),
@@ -538,7 +564,7 @@ export default function TransaksiPage() {
               </h4>
 
               <div className="bg-[#0d1117] border border-white/5 rounded-xl overflow-hidden">
-                {isHppLoading && (
+                {isFIFOLoading && (
                   <div className="px-5 py-2 text-xs text-gray-500 flex items-center gap-2 border-b border-white/5">
                     <div className="w-3 h-3 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin"></div>
                     Memuat data HPP...
@@ -557,8 +583,17 @@ export default function TransaksiPage() {
                   </thead>
                   <tbody className="divide-y divide-white/[0.02]">
                     {(selectedTx.transaksi_detail || []).map((item) => {
-                      const hppTotal = item.qty * (hppMap[item.nama_produk] ?? 0)
+                      const txDate = new Date(selectedTx.tanggal)
+                      const layers = buildLayersAtDate(hppAllForDetail, transaksiDetailAllForDetail, [], stokAwalMapForDetail, item.nama_produk, txDate)
+                      
+                      hppAllForDetail
+                        .filter(h => h.nama_produk === item.nama_produk && h.tanggal === txDate.toISOString().split('T')[0])
+                        .forEach(h => layers.push({ tanggal: h.tanggal, qty_awal: h.qty, qty_sisa: h.qty, hpp_satuan: h.hpp_satuan }))
+                      
+                      const fifo = hitungHPPFIFO(layers, item.qty)
+                      const hppTotal = fifo.total_hpp
                       const labaKotor = item.subtotal - hppTotal
+                      
                       return (
                         <tr key={item.id} className="hover:bg-white/[0.02]">
                           <td className="px-5 py-4">
@@ -580,7 +615,16 @@ export default function TransaksiPage() {
                   <tfoot className="border-t border-white/10 bg-[#161b22] text-sm">
                     {(() => {
                       const details = selectedTx.transaksi_detail || []
-                      const totalHpp = details.reduce((acc, item) => acc + item.qty * (hppMap[item.nama_produk] ?? 0), 0)
+                      let totalHpp = 0
+                      details.forEach(item => {
+                        const txDate = new Date(selectedTx.tanggal)
+                        const layers = buildLayersAtDate(hppAllForDetail, transaksiDetailAllForDetail, [], stokAwalMapForDetail, item.nama_produk, txDate)
+                        hppAllForDetail
+                          .filter(h => h.nama_produk === item.nama_produk && h.tanggal === txDate.toISOString().split('T')[0])
+                          .forEach(h => layers.push({ tanggal: h.tanggal, qty_awal: h.qty, qty_sisa: h.qty, hpp_satuan: h.hpp_satuan }))
+                        const fifo = hitungHPPFIFO(layers, item.qty)
+                        totalHpp += fifo.total_hpp
+                      })
                       const totalLaba = selectedTx.total - totalHpp
                       const margin = selectedTx.total > 0 ? (totalLaba / selectedTx.total) * 100 : 0
                       return (

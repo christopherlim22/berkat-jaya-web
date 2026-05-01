@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { fetchAllRows } from "@/utils/supabase/fetchAllRows"
 
 type Pengeluaran = {
   id: number; tanggal: string; kategori: string; sub_kategori: string
@@ -40,6 +41,11 @@ export default function PengeluaranPage() {
   const [opexForm, setOpexForm] = useState(EMPTY_OPEX_FORM)
   const [opexEditId, setOpexEditId] = useState<number | null>(null)
   const [isOpexSubmitting, setIsOpexSubmitting] = useState(false)
+  
+  // Filter & Search OpEx
+  const [searchPengeluaran, setSearchPengeluaran] = useState("")
+  const [filterKategori, setFilterKategori] = useState("Semua")
+  const [filterSubKategori, setFilterSubKategori] = useState("")
 
   // CapEx state
   const [capexList, setCapexList] = useState<PengeluaranCapex[]>([])
@@ -58,20 +64,30 @@ export default function PengeluaranPage() {
     setIsLoading(true)
     try {
       const [opex, capex] = await Promise.all([
-        supabase.from('pengeluaran').select('*').order('tanggal', { ascending: false }),
-        supabase.from('pengeluaran_capex').select('*').order('tanggal', { ascending: false })
+        fetchAllRows('pengeluaran', '*', { order: ['tanggal', false] }),
+        fetchAllRows('pengeluaran_capex', '*', { order: ['tanggal', false] })
       ])
-      if (opex.data) setOpexList(opex.data)
-      if (capex.data) setCapexList(capex.data)
+      if (opex) setOpexList(opex as Pengeluaran[])
+      if (capex) setCapexList(capex as PengeluaranCapex[])
     } catch (e) { console.error(e) }
     finally { setIsLoading(false) }
   }
 
   // Filtered OpEx by month/year
-  const filteredOpex = useMemo(() => opexList.filter(o => {
+  const baseFilteredOpex = useMemo(() => opexList.filter(o => {
     const d = new Date(o.tanggal)
     return d.getMonth() + 1 === opexFilter.bulan && d.getFullYear() === opexFilter.tahun
   }), [opexList, opexFilter])
+
+  const filteredOpex = useMemo(() => {
+    return baseFilteredOpex.filter(p => {
+      const passSearch = !searchPengeluaran || 
+        p.keterangan?.toLowerCase().includes(searchPengeluaran.toLowerCase()) ||
+        p.sub_kategori?.toLowerCase().includes(searchPengeluaran.toLowerCase())
+      const passKategori = filterKategori === "Semua" || p.kategori === filterKategori
+      return passSearch && passKategori
+    })
+  }, [baseFilteredOpex, searchPengeluaran, filterKategori])
 
   const totalOpex = useMemo(() => filteredOpex.reduce((acc, o) => acc + o.jumlah, 0), [filteredOpex])
 
@@ -329,6 +345,53 @@ export default function PengeluaranPage() {
             </form>
 
             {/* Tabel riwayat */}
+            
+            <div className="flex gap-3 items-center flex-wrap mb-4">
+              {/* Search keterangan */}
+              <input
+                value={searchPengeluaran}
+                onChange={e => setSearchPengeluaran(e.target.value)}
+                placeholder="🔍 Cari keterangan..."
+                className="flex-1 min-w-[200px] bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50"
+              />
+              
+              {/* Filter Kategori */}
+              <select
+                value={filterKategori}
+                onChange={e => { setFilterKategori(e.target.value); setFilterSubKategori("") }}
+                className="bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none cursor-pointer"
+              >
+                <option value="Semua">Semua Kategori</option>
+                {Array.from(new Set(baseFilteredOpex.map(p => p.kategori))).sort().map(k => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              {/* Total filtered */}
+              <div className="bg-[#161b22] border border-white/[0.06] rounded-xl p-4">
+                <p className="text-gray-400 text-xs mb-1">Total Pengeluaran (Filter Aktif)</p>
+                <p className="text-red-400 font-bold text-xl">
+                  {formatRp(totalOpex)}
+                </p>
+                <p className="text-gray-500 text-xs mt-1">{filteredOpex.length} entri</p>
+              </div>
+              
+              {/* Breakdown per kategori dari hasil filter */}
+              <div className="col-span-2 bg-[#161b22] border border-white/[0.06] rounded-xl p-4">
+                <p className="text-gray-400 text-xs mb-2">Breakdown Kategori</p>
+                <div className="space-y-1.5 max-h-24 overflow-y-auto pr-2">
+                  {breakdownKategori.map(([kat, total]) => (
+                    <div key={kat} className="flex justify-between items-center text-xs">
+                      <span className="text-gray-400">{kat}</span>
+                      <span className="text-orange-400 font-medium">{formatRp(total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
               <div className="px-6 py-4 border-b border-white/[0.05] flex items-center justify-between">
                 <h3 className="font-bold text-white">
@@ -393,6 +456,59 @@ export default function PengeluaranPage() {
                 </table>
               )}
             </div>
+
+            {/* Ringkasan per Keterangan */}
+            {(searchPengeluaran || filterKategori !== "Semua") && (
+              <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl overflow-hidden mt-4">
+                <div className="px-6 py-4 border-b border-white/[0.06]">
+                  <h3 className="font-bold text-white">Ringkasan per Keterangan</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">Grouped dari hasil filter aktif</p>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="bg-white/[0.02] border-b border-white/[0.04]">
+                    <tr>
+                      <th className="px-5 py-3 text-left text-xs text-gray-400 uppercase">Keterangan</th>
+                      <th className="px-5 py-3 text-left text-xs text-gray-400 uppercase">Kategori</th>
+                      <th className="px-5 py-3 text-center text-xs text-gray-400 uppercase">Frekuensi</th>
+                      <th className="px-5 py-3 text-right text-xs text-gray-400 uppercase">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.03]">
+                    {Object.entries(
+                      filteredOpex.reduce((acc, p) => {
+                        const key = `${p.keterangan || p.sub_kategori || '-'}__${p.kategori}`
+                        if (!acc[key]) acc[key] = { keterangan: p.keterangan || p.sub_kategori || '-', kategori: p.kategori, count: 0, total: 0 }
+                        acc[key].count++
+                        acc[key].total += p.jumlah
+                        return acc
+                      }, {} as Record<string, { keterangan: string; kategori: string; count: number; total: number }>)
+                    ).sort((a, b) => b[1].total - a[1].total).map(([key, data]) => (
+                      <tr key={key} className="hover:bg-white/[0.01]">
+                        <td className="px-5 py-3 text-gray-300">{data.keterangan}</td>
+                        <td className="px-5 py-3">
+                          <span className="text-xs bg-white/5 text-gray-400 px-2 py-0.5 rounded-full border border-white/10">
+                            {data.kategori}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-center text-gray-400">{data.count}x</td>
+                        <td className="px-5 py-3 text-right font-semibold text-red-400">{formatRp(data.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="border-t border-white/10 bg-[#0d1117]/60">
+                    <tr>
+                      <td colSpan={2} className="px-5 py-3 text-gray-400 font-semibold">Total</td>
+                      <td className="px-5 py-3 text-center text-gray-400 font-semibold">
+                        {filteredOpex.length}x
+                      </td>
+                      <td className="px-5 py-3 text-right font-bold text-red-400">
+                        {formatRp(totalOpex)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
           </div>
         )}
 

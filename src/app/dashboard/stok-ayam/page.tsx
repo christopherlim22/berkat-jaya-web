@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from "react"
 import { supabase } from "@/utils/supabase/client"
 import { getUserRole } from "@/utils/supabase/getUserRole"
+import { fetchAllRows } from "@/lib/fetchAll"
 
 type Produk = { id: number; nama: string; satuan: string; aktif: boolean }
 type Supplier = { id: number; nama: string }
@@ -258,22 +259,38 @@ export default function StokAyamPage() {
   const fetchAll = async () => {
     setIsLoading(true)
     try {
-      const [p, s, h, sa, o, td, ksd] = await Promise.all([
+      const [p, s, hData, sa, oData, ksdData, allTd] = await Promise.all([
         supabase.from('produk').select('*').eq('aktif', true).order('nama'),
         supabase.from('supplier').select('id, nama').order('nama'),
-        supabase.from('hpp').select('*').order('tanggal', { ascending: false }),
+        fetchAllRows('hpp', '*', { order: ['tanggal', false] }),
         supabase.from('stok_awal').select('*'),
-        supabase.from('opname').select('*').order('tanggal', { ascending: false }),
-        supabase.from('transaksi_detail').select('nama_produk, qty'),
-        supabase.from('konversi_stok_detail').select('*')
+        fetchAllRows('opname', '*', { order: ['tanggal', false] }),
+        fetchAllRows('konversi_stok_detail', '*'),
+        fetchAllRows('transaksi_detail', 'nama_produk, qty')
       ])
+
       if (p.data) setProdukList(p.data)
       if (s.data) setSupplierList(s.data)
-      if (h.data) setHppList(h.data)
+      setHppList(hData as Hpp[])
       if (sa.data) setStokAwalList(sa.data)
-      if (o.data) setOpnameList(o.data)
-      if (td.data) setTransaksiDetail(td.data)
-      if (ksd.data) setKonversiDetailAll(ksd.data)
+      setOpnameList(oData as OpnameRecord[])
+      setKonversiDetailAll(ksdData as any)
+
+      // Normalisasi nama_produk: trim whitespace untuk menghindari mismatch nama produk
+      const normalizedTd = allTd.map(r => ({
+        nama_produk: r.nama_produk?.trim() ?? '',
+        qty: r.qty
+      }))
+      setTransaksiDetail(normalizedTd)
+
+      // DEBUG LOG — buka DevTools Console untuk verifikasi
+      const grouped: Record<string, number> = {}
+      normalizedTd.forEach(r => {
+        grouped[r.nama_produk] = (grouped[r.nama_produk] || 0) + r.qty
+      })
+      console.log(`[StokAyam] ✅ Total baris transaksi_detail: ${normalizedTd.length} (${page} halaman x ${PAGE_SIZE})`)
+      console.log('[StokAyam] Total qty keluar per produk:', grouped)
+
     } catch (e) { console.error(e) }
     finally { setIsLoading(false) }
   }
@@ -281,14 +298,45 @@ export default function StokAyamPage() {
   const selectedProdukOpname = produkList.find(p => p.id === parseInt(opnameForm.produk_id))
 
   const stokData = useMemo((): StokItem[] => {
+    // ===== DEBUG LOGS (sesuai permintaan) =====
+    console.log('Total transaksi_detail rows fetched:', transaksiDetail.length)
+    const doriRows = transaksiDetail.filter(d => d.nama_produk === 'Dori')
+    console.log('Dori keluar rows:', doriRows)
+    console.log('Dori total keluar qty:', doriRows.reduce((a, d) => a + d.qty, 0))
+    // ==========================================
+
     return produkList.map(produk => {
       const sa = stokAwalList.find(s => s.produk_id === produk.id)
       const stok_awal = sa?.qty || 0
-      const total_masuk = hppList.filter(h => h.produk_id === produk.id).reduce((acc, h) => acc + h.qty, 0)
-      const konv_keluar = konversiDetailAll.filter(d => d.arah === 'keluar' && d.produk_id === produk.id).reduce((acc, d) => acc + d.qty, 0)
-      const total_keluar = transaksiDetail.filter(t => t.nama_produk === produk.nama).reduce((acc, t) => acc + t.qty, 0) + konv_keluar
-      const koreksi_opname = opnameList.filter(o => o.produk_id === produk.id).reduce((acc, o) => acc + o.selisih, 0)
+
+      // total_masuk = pembelian dari hpp + konversi masuk
+      // Tanpa filter tanggal — kalkulasi stok kumulatif dari semua data
+      const masuk_hpp = hppList
+        .filter(h => h.produk_id === produk.id)
+        .reduce((acc, h) => acc + (h.qty || 0), 0)
+      const konv_masuk = konversiDetailAll
+        .filter(d => d.arah === 'masuk' && d.produk_id === produk.id)
+        .reduce((acc, d) => acc + (d.qty || 0), 0)
+      const total_masuk = masuk_hpp + konv_masuk
+
+      // total_keluar = penjualan dari transaksi + konversi keluar
+      // Tanpa filter tanggal — semua transaksi sepanjang waktu
+      // Gunakan trim + lowercase untuk menghindari mismatch nama produk
+      const namaProdukNorm = produk.nama.trim().toLowerCase()
+      const keluar_transaksi = transaksiDetail
+        .filter(t => t.nama_produk.trim().toLowerCase() === namaProdukNorm)
+        .reduce((acc, t) => acc + (t.qty || 0), 0)
+      const konv_keluar = konversiDetailAll
+        .filter(d => d.arah === 'keluar' && d.produk_id === produk.id)
+        .reduce((acc, d) => acc + (d.qty || 0), 0)
+      const total_keluar = keluar_transaksi + konv_keluar
+
+      const koreksi_opname = opnameList
+        .filter(o => o.produk_id === produk.id)
+        .reduce((acc, o) => acc + (o.selisih || 0), 0)
+
       const stok_akhir = stok_awal + total_masuk - total_keluar + koreksi_opname
+
       return { produk_id: produk.id, nama_produk: produk.nama, satuan: produk.satuan, stok_awal, total_masuk, total_keluar, koreksi_opname, stok_akhir }
     })
   }, [produkList, stokAwalList, hppList, transaksiDetail, opnameList, konversiDetailAll])
@@ -311,11 +359,23 @@ export default function StokAyamPage() {
     setDetailData(null)
     setIsDetailLoading(true)
     try {
+      // Normalisasi nama produk untuk pencocokan yang konsisten
+      const namaProdukTrimmed = item.nama_produk.trim()
       const [masukRes, keluarRes, opnameRes] = await Promise.all([
         supabase.from('hpp').select('*').eq('produk_id', item.produk_id).order('tanggal', { ascending: false }),
-        supabase.from('transaksi_detail').select('id, transaksi_id, nama_produk, qty, transaksi!inner(tanggal, no_nota, nama_pembeli)').eq('nama_produk', item.nama_produk).order('transaksi_id', { ascending: false }),
+        // Gunakan left join (bukan !inner) agar semua transaksi_detail ikut terhitung
+        // meskipun transaksi induknya tidak ditemukan (misalnya sudah dihapus)
+        supabase.from('transaksi_detail')
+          .select('id, transaksi_id, nama_produk, qty, transaksi(tanggal, no_nota, nama_pembeli)')
+          .eq('nama_produk', namaProdukTrimmed)
+          .order('transaksi_id', { ascending: false }),
         supabase.from('opname').select('*').eq('produk_id', item.produk_id).order('tanggal', { ascending: false }),
       ])
+
+      // Log untuk debug: cek berapa transaksi_detail yang ditemukan
+      console.log(`[StokAyam Detail] ${namaProdukTrimmed}: ${keluarRes.data?.length ?? 0} transaksi keluar ditemukan`)
+      if (keluarRes.error) console.error('[StokAyam Detail] keluar error:', keluarRes.error)
+
       setDetailData({
         masuk: (masukRes.data as HPP[]) || [],
         keluar: (keluarRes.data as unknown as DetailKeluar[]) || [],
@@ -399,18 +459,9 @@ export default function StokAyamPage() {
         setStokAwalList(prev => [...prev, data as StokAwal])
       }
 
-      await supabase.from('hpp').insert({
-        tanggal: new Date().toISOString().split('T')[0],
-        produk_id: parseInt(stokAwalForm.produk_id),
-        nama_produk: produk?.nama || "",
-        satuan: produk?.satuan || "",
-        hpp_satuan: hppSatuan,
-        qty: qtyStokAwal,
-        total_modal: hppSatuan * qtyStokAwal,
-        nama_supplier: 'Stok Awal',
-        tipe_bayar: 'Tunai',
-        catatan: 'Set stok awal'
-      })
+      // Catatan: stok_awal TIDAK dimasukkan ke tabel hpp agar tidak terhitung
+      // dobel. stok_awal sudah dihitung terpisah dari tabel stok_awal di stokData.
+      // hpp hanya diisi untuk pembelian dari supplier (tab Input HPP).
 
       setStokAwalForm({ produk_id: "", qty: "", hpp_satuan: "" })
       setShowStokAwalModal(false)

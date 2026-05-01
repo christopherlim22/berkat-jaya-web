@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { fetchAllRows } from "@/lib/fetchAll"
+import { buildLayersAtDate, hitungHPPFIFO } from "@/lib/fifo"
 
 type Transaksi = {
   id: number; no_nota: string; tanggal: string
@@ -33,13 +35,19 @@ export default function RekapPage() {
   const [filterTahun, setFilterTahun] = useState(thisYear)
   const [isLoading, setIsLoading] = useState(true)
 
-  const [transaksiAll, setTransaksiAll] = useState<Transaksi[]>([])
-  const [detailAll, setDetailAll] = useState<TransaksiDetail[]>([])
-  const [piutangAll, setPiutangAll] = useState<Piutang[]>([])
-  const [hppLatest, setHppLatest] = useState<HPPLatest[]>([])
+  const [transaksiAll, setTransaksiAll] = useState<any[]>([])
+  const [detailAll, setDetailAll] = useState<any[]>([])
+  const [piutangAll, setPiutangAll] = useState<any[]>([])
+  const [hppAll, setHppAll] = useState<any[]>([])
+  const [stokAwalMap, setStokAwalMap] = useState<any>({})
+  const [konversiDetailAll, setKonversiDetailAll] = useState<any[]>([])
 
   // Modal detail pembeli
   const [modalPembeli, setModalPembeli] = useState<string | null>(null)
+  
+  // State Filter & Sort Rekap Pembeli
+  const [searchPembeli, setSearchPembeli] = useState("")
+  const [sortPembeli, setSortPembeli] = useState("total_desc")
 
   const formatRp = (n: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n)
@@ -51,28 +59,36 @@ export default function RekapPage() {
   const fetchAll = async () => {
     setIsLoading(true)
     try {
-      const [trxRes, detailRes, piutangRes, hppRes] = await Promise.all([
-        supabase.from('transaksi').select('*').order('tanggal', { ascending: false }),
-        supabase.from('transaksi_detail').select('*'),
-        supabase.from('piutang').select('nama_pembeli, sisa'),
-        supabase.from('hpp').select('nama_produk, hpp_satuan, tanggal').order('tanggal', { ascending: false }),
+      const [trxData, detailRaw, piutangData, hppData, produkData, konversiData] = await Promise.all([
+        fetchAllRows('transaksi', '*', { order: ['tanggal', false] }),
+        fetchAllRows('transaksi_detail', '*'),
+        fetchAllRows('piutang', 'nama_pembeli, sisa'),
+        fetchAllRows('hpp', '*', { order: ['tanggal', true] }),
+        supabase.from('produk').select('*'),
+        fetchAllRows('konversi_stok_detail', '*, konversi_stok(tanggal)')
       ])
-      if (trxRes.data) setTransaksiAll(trxRes.data as Transaksi[])
-      if (detailRes.data) setDetailAll(detailRes.data as TransaksiDetail[])
-      if (piutangRes.data) setPiutangAll(piutangRes.data as Piutang[])
+      
+      const trxMap = Object.fromEntries(trxData.map(t => [t.id, t]))
+      const joinedDetail = detailRaw.map(d => ({
+        ...d,
+        transaksi: trxMap[d.transaksi_id] || null
+      }))
 
-      // Keep only latest HPP per produk
-      if (hppRes.data) {
-        const seen = new Set<string>()
-        const latest: HPPLatest[] = []
-        for (const row of hppRes.data as any[]) {
-          if (!seen.has(row.nama_produk)) {
-            seen.add(row.nama_produk)
-            latest.push({ nama_produk: row.nama_produk, hpp_satuan: row.hpp_satuan })
-          }
-        }
-        setHppLatest(latest)
+      setTransaksiAll(trxData)
+      setDetailAll(joinedDetail)
+      setPiutangAll(piutangData)
+      setHppAll(hppData)
+      setKonversiDetailAll(konversiData)
+
+      const saMap: Record<string, any> = {}
+      if (produkData.data) {
+        produkData.data.forEach((p: any) => {
+          const hppPertama = hppData.filter((h: any) => h.nama_produk === p.nama)
+            .sort((a: any, b: any) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime())[0]
+          saMap[p.nama] = { qty: p.stok_awal || 0, hpp_satuan: hppPertama?.hpp_satuan || 0, tanggal: '2026-03-30' }
+        })
       }
+      setStokAwalMap(saMap)
     } catch (e) { console.error(e) }
     finally { setIsLoading(false) }
   }
@@ -116,35 +132,94 @@ export default function RekapPage() {
     }).sort((a, b) => b.totalBeli - a.totalBeli)
   }, [filteredTrx, piutangAll])
 
+  const filteredPembeli = useMemo(() => {
+    let list = rekapPembeli
+    
+    // Filter search
+    if (searchPembeli) {
+      list = list.filter(p => p.nama.toLowerCase().includes(searchPembeli.toLowerCase()))
+    }
+    
+    // Sort
+    switch (sortPembeli) {
+      case 'total_desc': list = [...list].sort((a, b) => b.totalBeli - a.totalBeli); break
+      case 'total_asc': list = [...list].sort((a, b) => a.totalBeli - b.totalBeli); break
+      case 'trx_desc': list = [...list].sort((a, b) => b.jmlTrx - a.jmlTrx); break
+      case 'trx_asc': list = [...list].sort((a, b) => a.jmlTrx - b.jmlTrx); break
+      case 'piutang_desc': list = [...list].sort((a, b) => (b.sisaPiutang || 0) - (a.sisaPiutang || 0)); break
+      case 'piutang_asc': list = [...list].sort((a, b) => (a.sisaPiutang || 0) - (b.sisaPiutang || 0)); break
+      case 'nama_az': list = [...list].sort((a, b) => a.nama.localeCompare(b.nama)); break
+      case 'nama_za': list = [...list].sort((a, b) => b.nama.localeCompare(a.nama)); break
+      case 'terakhir_desc': list = [...list].sort((a, b) => new Date(b.terakhir).getTime() - new Date(a.terakhir).getTime()); break
+    }
+    
+    return list
+  }, [rekapPembeli, searchPembeli, sortPembeli])
+
   // ===== REKAP PRODUK =====
   const rekapProduk = useMemo(() => {
-    const map: Record<string, { qty: number; omzet: number; satuan: string }> = {}
-    filteredDetail.forEach(d => {
-      if (!map[d.nama_produk]) map[d.nama_produk] = { qty: 0, omzet: 0, satuan: "" }
+    const map: Record<string, { qty: number; total_omzet: number; satuan: string }> = {}
+    filteredDetail.forEach((d: any) => {
+      if (!map[d.nama_produk]) map[d.nama_produk] = { qty: 0, total_omzet: 0, satuan: "" }
       map[d.nama_produk].qty += d.qty
-      map[d.nama_produk].omzet += d.subtotal
+      map[d.nama_produk].total_omzet += d.subtotal
     })
 
-    const hppMap: Record<string, number> = {}
-    hppLatest.forEach(h => { hppMap[h.nama_produk] = h.hpp_satuan })
+    return Object.entries(map).map(([nama, { qty, total_omzet }]) => {
+      // Dapatkan semua transaksi produk ini urut tanggal
+      const detailProduk = detailAll
+        .filter((d: any) => d.nama_produk === nama)
+        .sort((a: any, b: any) => {
+          const tA = Array.isArray(a.transaksi) ? a.transaksi[0]?.tanggal : a.transaksi?.tanggal
+          const tB = Array.isArray(b.transaksi) ? b.transaksi[0]?.tanggal : b.transaksi?.tanggal
+          return new Date(tA || 0).getTime() - new Date(tB || 0).getTime()
+        })
 
-    return Object.entries(map).map(([nama, { qty, omzet }]) => {
-      const hppSatuan = hppMap[nama] || 0
-      const hppTotal = qty * hppSatuan
-      const labaKotor = omzet - hppTotal
-      const margin = omzet > 0 ? (labaKotor / omzet) * 100 : 0
-      return { nama, qty, omzet, hppTotal, labaKotor, margin }
-    }).sort((a, b) => b.omzet - a.omzet)
-  }, [filteredDetail, hppLatest])
+      // Hitung HPP FIFO secara kumulatif per transaksi
+      let total_hpp_fifo = 0
+      let layersCurrent = buildLayersAtDate(hppAll, [], [], stokAwalMap, nama, new Date('2026-03-31'))
+      
+      // Tambah semua pembelian dari awal
+      hppAll
+        .filter((h: any) => h.nama_produk === nama)
+        .sort((a: any, b: any) => new Date(a.tanggal).getTime() - new Date(b.tanggal).getTime())
+        .forEach((h: any) => layersCurrent.push({ tanggal: h.tanggal, qty_awal: h.qty, qty_sisa: h.qty, hpp_satuan: h.hpp_satuan }))
+
+      detailProduk.forEach((d: any) => {
+        const fifo = hitungHPPFIFO(layersCurrent, d.qty)
+        // Kalau d.id ada di filteredDetail, maka kita tambahkan ke total_hpp_fifo
+        // Wait, the FIFO must consume ALL transactions from beginning to ensure correct stock matching.
+        // So we consume all, but only add to total_hpp_fifo if this detail is inside `filteredDetail`.
+        // Wait, `filteredDetail` contains the transactions for the selected filter period!
+        if (filteredTrxIds.has(d.transaksi_id)) {
+          total_hpp_fifo += fifo.total_hpp
+        }
+        
+        // Consume layers
+        let remaining = d.qty
+        for (const layer of layersCurrent) {
+          if (remaining <= 0) break
+          const consumed = Math.min(remaining, layer.qty_sisa)
+          layer.qty_sisa -= consumed
+          remaining -= consumed
+        }
+      })
+
+      const laba_kotor_fifo = total_omzet - total_hpp_fifo
+      const margin_fifo = total_omzet > 0 ? (laba_kotor_fifo / total_omzet) * 100 : 0
+      
+      return { nama, qty, total_omzet, total_hpp_fifo, laba_kotor_fifo, margin_fifo }
+    }).sort((a, b) => b.total_omzet - a.total_omzet)
+  }, [filteredDetail, detailAll, hppAll, stokAwalMap, filteredTrxIds])
 
   const totalRekapProduk = useMemo(() => rekapProduk.reduce(
     (acc, r) => ({
       qty: acc.qty + r.qty,
-      omzet: acc.omzet + r.omzet,
-      hppTotal: acc.hppTotal + r.hppTotal,
-      labaKotor: acc.labaKotor + r.labaKotor,
+      total_omzet: acc.total_omzet + r.total_omzet,
+      total_hpp_fifo: acc.total_hpp_fifo + r.total_hpp_fifo,
+      laba_kotor_fifo: acc.laba_kotor_fifo + r.laba_kotor_fifo,
     }),
-    { qty: 0, omzet: 0, hppTotal: 0, labaKotor: 0 }
+    { qty: 0, total_omzet: 0, total_hpp_fifo: 0, laba_kotor_fifo: 0 }
   ), [rekapProduk])
 
   // Transaksi modal pembeli
@@ -208,12 +283,40 @@ export default function RekapPage() {
               <div className="bg-[#161b22] border border-white/[0.05] rounded-2xl overflow-hidden">
                 <div className="px-6 py-4 border-b border-white/[0.05] flex items-center justify-between">
                   <h3 className="font-bold text-white">Daftar Pembeli</h3>
-                  <span className="text-xs text-gray-500">{rekapPembeli.length} pembeli</span>
+                  <span className="text-xs text-gray-500">{filteredPembeli.length} pembeli</span>
                 </div>
-                {rekapPembeli.length === 0 ? (
+                
+                {/* Filter & Sort Bar */}
+                <div className="px-6 py-4 border-b border-white/[0.05] bg-[#0d1117]/50">
+                  <div className="flex gap-3 items-center">
+                    <input
+                      value={searchPembeli}
+                      onChange={e => setSearchPembeli(e.target.value)}
+                      placeholder="🔍 Cari nama pembeli..."
+                      className="flex-1 bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-green-500/50"
+                    />
+                    <select
+                      value={sortPembeli}
+                      onChange={e => setSortPembeli(e.target.value)}
+                      className="bg-[#161b22] border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none cursor-pointer"
+                    >
+                      <option value="total_desc">Total Beli Terbesar</option>
+                      <option value="total_asc">Total Beli Terkecil</option>
+                      <option value="trx_desc">Transaksi Terbanyak</option>
+                      <option value="trx_asc">Transaksi Tersedikit</option>
+                      <option value="piutang_desc">Piutang Terbesar</option>
+                      <option value="piutang_asc">Piutang Terkecil</option>
+                      <option value="nama_az">Nama A-Z</option>
+                      <option value="nama_za">Nama Z-A</option>
+                      <option value="terakhir_desc">Transaksi Terbaru</option>
+                    </select>
+                  </div>
+                </div>
+
+                {filteredPembeli.length === 0 ? (
                   <div className="p-12 text-center text-gray-500">
                     <span className="text-4xl block mb-3 opacity-40">👤</span>
-                    Tidak ada transaksi pada periode ini
+                    Tidak ada pembeli yang sesuai.
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -231,7 +334,7 @@ export default function RekapPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/[0.02]">
-                        {rekapPembeli.map((r, i) => (
+                        {filteredPembeli.map((r, i) => (
                           <tr key={r.nama} className="hover:bg-white/[0.01] transition-colors">
                             <td className="px-4 py-3 text-gray-500">{i + 1}</td>
                             <td className="px-4 py-3 font-semibold text-white">{r.nama}</td>
@@ -281,9 +384,9 @@ export default function RekapPage() {
                           <th className="px-4 py-3 text-left">Produk</th>
                           <th className="px-4 py-3 text-right">Qty Terjual</th>
                           <th className="px-4 py-3 text-right">Omzet</th>
-                          <th className="px-4 py-3 text-right">HPP Total</th>
-                          <th className="px-4 py-3 text-right">Laba Kotor</th>
-                          <th className="px-4 py-3 text-right">Margin</th>
+                          <th className="px-4 py-3 text-right">HPP Total FIFO</th>
+                          <th className="px-4 py-3 text-right">Laba Kotor FIFO</th>
+                          <th className="px-4 py-3 text-right">Margin FIFO</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/[0.02]">
@@ -292,14 +395,14 @@ export default function RekapPage() {
                             <td className="px-4 py-3 text-gray-500">{i + 1}</td>
                             <td className="px-4 py-3 font-semibold text-white">{r.nama}</td>
                             <td className="px-4 py-3 text-right text-gray-300">{r.qty.toLocaleString("id-ID")}</td>
-                            <td className="px-4 py-3 text-right font-semibold text-green-400">{formatRp(r.omzet)}</td>
-                            <td className="px-4 py-3 text-right text-red-400">{formatRp(r.hppTotal)}</td>
-                            <td className={`px-4 py-3 text-right font-semibold ${r.labaKotor >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                              {formatRp(r.labaKotor)}
+                            <td className="px-4 py-3 text-right font-semibold text-green-400">{formatRp(r.total_omzet)}</td>
+                            <td className="px-4 py-3 text-right text-red-400">{formatRp(r.total_hpp_fifo)}</td>
+                            <td className={`px-4 py-3 text-right font-semibold ${r.laba_kotor_fifo >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                              {formatRp(r.laba_kotor_fifo)}
                             </td>
                             <td className="px-4 py-3 text-right">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.margin >= 20 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : r.margin >= 10 ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                                {r.margin.toFixed(1)}%
+                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.margin_fifo >= 20 ? 'bg-green-500/10 text-green-400 border border-green-500/20' : r.margin_fifo >= 10 ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                                {r.margin_fifo.toFixed(1)}%
                               </span>
                             </td>
                           </tr>
@@ -309,11 +412,11 @@ export default function RekapPage() {
                         <tr className="font-bold">
                           <td colSpan={2} className="px-4 py-3 text-gray-400">Total</td>
                           <td className="px-4 py-3 text-right text-white">{totalRekapProduk.qty.toLocaleString("id-ID")}</td>
-                          <td className="px-4 py-3 text-right text-green-400">{formatRp(totalRekapProduk.omzet)}</td>
-                          <td className="px-4 py-3 text-right text-red-400">{formatRp(totalRekapProduk.hppTotal)}</td>
-                          <td className={`px-4 py-3 text-right ${totalRekapProduk.labaKotor >= 0 ? 'text-blue-400' : 'text-red-400'}`}>{formatRp(totalRekapProduk.labaKotor)}</td>
+                          <td className="px-4 py-3 text-right text-green-400">{formatRp(totalRekapProduk.total_omzet)}</td>
+                          <td className="px-4 py-3 text-right text-red-400">{formatRp(totalRekapProduk.total_hpp_fifo)}</td>
+                          <td className={`px-4 py-3 text-right ${totalRekapProduk.laba_kotor_fifo >= 0 ? 'text-blue-400' : 'text-red-400'}`}>{formatRp(totalRekapProduk.laba_kotor_fifo)}</td>
                           <td className="px-4 py-3 text-right text-gray-400 text-xs">
-                            {totalRekapProduk.omzet > 0 ? ((totalRekapProduk.labaKotor / totalRekapProduk.omzet) * 100).toFixed(1) + '%' : '-'}
+                            {totalRekapProduk.total_omzet > 0 ? ((totalRekapProduk.laba_kotor_fifo / totalRekapProduk.total_omzet) * 100).toFixed(1) + '%' : '-'}
                           </td>
                         </tr>
                       </tfoot>

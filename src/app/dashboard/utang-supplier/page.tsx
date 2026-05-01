@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
+import { fetchAllRows } from "@/utils/supabase/fetchAllRows"
 
 type UtangSupplier = {
   id: number
@@ -45,11 +46,7 @@ export default function UtangSupplierPage() {
   const fetchUtang = async () => {
     setIsLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('utang_supplier')
-        .select('*')
-        .order('tanggal', { ascending: false })
-      if (error) throw error
+      const data = await fetchAllRows('utang_supplier', '*', { order: ['tanggal', false] })
       setUtangData(data as UtangSupplier[])
     } catch (err) {
       console.error("Error fetching utang_supplier:", err)
