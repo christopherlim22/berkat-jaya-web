@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react"
 import { supabase } from "@/utils/supabase/client"
 import { fetchAllRows } from "@/lib/fetchAll"
 import { buildLayersAtDate, hitungHPPFIFO } from "@/lib/fifo"
+import { downloadExcel, downloadPDF, type DownloadData } from "@/lib/download"
 import { Calendar, DollarSign, Package, Users, Banknote, CreditCard, Wallet, TrendingUp } from "lucide-react"
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
@@ -108,6 +109,8 @@ export default function LaporanPage() {
   const [opnameAllList, setOpnameAllList] = useState<OpnameRecord[]>([])
   const [detailAllList, setDetailAllList] = useState<DetailWithDate[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false)
 
   const [stokAwalMap, setStokAwalMap] = useState<Record<string, { qty: number; hpp_satuan: number; tanggal: string }>>({})
   const [konversiDetailAll, setKonversiDetailAll] = useState<any[]>([])
@@ -721,6 +724,75 @@ export default function LaporanPage() {
     }
   }, [transaksiDetailAll, hppAllList, konversiDetailAll, stokAwalMap])
 
+  const handleDownload = async (format: 'excel' | 'pdf') => {
+    setIsDownloading(true)
+    setShowDownloadMenu(false)
+    try {
+      const mm = String(selectedMonth + 1).padStart(2, '0')
+      const lastDay = new Date(selectedYear, selectedMonth + 1, 0).getDate()
+      const startStr = `${selectedYear}-${mm}-01`
+      const endStr = `${selectedYear}-${mm}-${String(lastDay).padStart(2, '0')}`
+      const startDateTimeStr = `${startStr}T00:00:00`
+      const endDateTimeStr = `${endStr}T23:59:59.999`
+
+      const [trxRes, penRes, piutangRes, utangRes, pembeliRes] = await Promise.all([
+        supabase.from('transaksi').select('no_nota, tanggal, nama_pembeli, jenis_pembayaran, total').gte('tanggal', startDateTimeStr).lte('tanggal', endDateTimeStr).order('tanggal'),
+        supabase.from('pengeluaran').select('tanggal, kategori, keterangan, jumlah').gte('tanggal', startStr).lte('tanggal', endStr).order('tanggal'),
+        supabase.from('piutang').select('no_nota, tanggal, nama_pembeli, total, terbayar, sisa, status').order('tanggal', { ascending: false }),
+        supabase.from('utang_supplier').select('tanggal, nama_supplier, total, terbayar, sisa, status').order('tanggal', { ascending: false }),
+        supabase.from('transaksi').select('nama_pembeli, total, jenis_pembayaran').gte('tanggal', startDateTimeStr).lte('tanggal', endDateTimeStr),
+      ])
+
+      // Build rekap pembeli
+      const pembeliMap: Record<string, any> = {}
+      pembeliRes.data?.forEach(t => {
+        if (!pembeliMap[t.nama_pembeli]) pembeliMap[t.nama_pembeli] = { nama: t.nama_pembeli, jumlah_transaksi: 0, total: 0, sisa_piutang: 0 }
+        pembeliMap[t.nama_pembeli].jumlah_transaksi++
+        pembeliMap[t.nama_pembeli].total += t.total
+      })
+      piutangRes.data?.filter(p => p.status === 'belum lunas').forEach(p => {
+        if (pembeliMap[p.nama_pembeli]) pembeliMap[p.nama_pembeli].sisa_piutang += p.sisa
+      })
+      const rekapPembeli = Object.values(pembeliMap)
+        .map((p: any) => ({ ...p, rata_rata: p.jumlah_transaksi > 0 ? p.total / p.jumlah_transaksi : 0 }))
+        .sort((a: any, b: any) => b.total - a.total)
+
+      // Build rekap produk dari cogsData
+      const rekapProduk = cogsData.breakdown.map(b => {
+        const omzetProduk = transaksiDetail.filter(td => td.nama_produk === b.nama).reduce((a, td) => a + (td.subtotal || td.qty * td.harga || 0), 0)
+        return { nama: b.nama, qty: b.qty, omzet: omzetProduk, hpp: b.total, laba: omzetProduk - b.total, margin: omzetProduk > 0 ? ((omzetProduk - b.total) / omzetProduk) * 100 : 0 }
+      }).sort((a, b) => b.omzet - a.omzet)
+
+      const downloadData: DownloadData = {
+        bulan: selectedMonth,
+        tahun: selectedYear,
+        ringkasan: {
+          omzet: omzet.total, hpp: cogsData.cogs, labaKotor, pengeluaran: totalPengeluaran, labaBersih,
+          marginBersih: omzet.total > 0 ? (labaBersih / omzet.total) * 100 : 0,
+          jumlahTransaksi: transaksi.length,
+        },
+        labaRugi: {
+          omzetTunai: omzet.tunai, omzetTransfer: omzet.transfer, omzetPiutang: omzet.piutang,
+          hppBreakdown: cogsData.breakdown.map(b => ({ nama: b.nama, qty: b.qty, hpp_satuan: b.hpp_satuan_fifo, total: b.total })),
+          pengeluaranPerKategori,
+        },
+        transaksi: trxRes.data || [],
+        rekapProduk,
+        rekapPembeli,
+        pengeluaran: penRes.data || [],
+        piutang: piutangRes.data || [],
+        utang: utangRes.data || [],
+      }
+
+      if (format === 'excel') downloadExcel(downloadData)
+      else downloadPDF(downloadData)
+    } catch (err: any) {
+      alert('Gagal download: ' + err.message)
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
   const FilterBar = () => (
     <div className="flex items-center gap-4">
       <div className="flex items-center gap-2 bg-[#161b22] px-3 py-2 rounded-xl border border-white/10 shadow-sm">
@@ -749,7 +821,35 @@ export default function LaporanPage() {
           </h2>
           <p className="text-sm text-gray-400 mt-1">Ringkasan penjualan, pengeluaran, dan laba bersih</p>
         </div>
-        <FilterBar />
+        <div className="flex items-center gap-3">
+          <FilterBar />
+          <div className="relative">
+            <button
+              onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+              disabled={isDownloading}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 shadow-lg shadow-green-900/30"
+            >
+              {isDownloading ? (
+                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Mengunduh...</>
+              ) : (
+                <>📥 Download<span className="text-green-200">▾</span></>
+              )}
+            </button>
+            {showDownloadMenu && !isDownloading && (
+              <div className="absolute right-0 top-full mt-2 bg-[#161b22] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden min-w-[200px]">
+                <button onClick={() => handleDownload('excel')} className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors border-b border-white/5">
+                  <span className="text-xl">📊</span>
+                  <div><p className="font-medium">Download Excel</p><p className="text-xs text-gray-500">Format .xlsx, 8 sheet</p></div>
+                </button>
+                <button onClick={() => handleDownload('pdf')} className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/5 hover:text-white transition-colors">
+                  <span className="text-xl">📄</span>
+                  <div><p className="font-medium">Download PDF</p><p className="text-xs text-gray-500">Format .pdf, 7 halaman</p></div>
+                </button>
+              </div>
+            )}
+            {showDownloadMenu && <div className="fixed inset-0 z-40" onClick={() => setShowDownloadMenu(false)} />}
+          </div>
+        </div>
       </header>
 
       <main className="flex-1 p-8 overflow-y-auto space-y-6">
