@@ -15,7 +15,7 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
           supabaseResponse = NextResponse.next({
             request,
           })
@@ -27,12 +27,18 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
+  // PENTING: Gunakan getSession() bukan getUser() di middleware.
+  // getUser() melakukan network call ke Supabase Auth server → menyebabkan 504 timeout.
+  // getSession() hanya membaca cookie lokal → sangat cepat, tidak ada network call.
+  // Verifikasi keamanan penuh (getUser) dilakukan di Server Components/API routes, bukan di sini.
   const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    data: { session },
+  } = await supabase.auth.getSession()
+
+  const isLoggedIn = !!session
 
   if (
-    !user &&
+    !isLoggedIn &&
     !request.nextUrl.pathname.startsWith('/api') &&
     request.nextUrl.pathname.startsWith('/dashboard')
   ) {
@@ -41,7 +47,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  if (user && request.nextUrl.pathname === '/') {
+  if (isLoggedIn && request.nextUrl.pathname === '/') {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)

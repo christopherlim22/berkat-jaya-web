@@ -1,205 +1,208 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { createClient } from "@/utils/supabase/client"
+import { useState, useEffect } from "react"
+import { supabase } from "@/utils/supabase/client"
 
-export default function LoginPage() {
-  const router = useRouter()
-  const [username, setUsername] = useState("")
-  const [password, setPassword] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
+type Transaksi = {
+  id: number
+  no_nota: string
+  tanggal: string
+  nama_pembeli: string
+  jenis_pembayaran: string
+  total: number
+}
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
+export default function DashboardPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [omzetHariIni, setOmzetHariIni] = useState(0)
+  const [jumlahTransaksi, setJumlahTransaksi] = useState(0)
+  const [totalPiutang, setTotalPiutang] = useState(0)
+  const [jumlahPelanggan, setJumlahPelanggan] = useState(0)
+  const [recentTransaksi, setRecentTransaksi] = useState<Transaksi[]>([])
 
-    if (!username || !password) {
-      setError("Username dan password harus diisi.")
-      return
+  const formatRp = (num: number) =>
+    new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(num)
+
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  const fetchDashboardData = async () => {
+    setIsLoading(true)
+    try {
+      // Today's date range (local)
+      const now = new Date()
+      const tzOffset = now.getTimezoneOffset() * 60000
+      const todayLocal = new Date(now.getTime() - tzOffset).toISOString().split('T')[0]
+      const startOfDay = new Date(todayLocal + 'T00:00:00.000Z').toISOString()
+      const endOfDay = new Date(todayLocal + 'T23:59:59.999Z').toISOString()
+
+      // Transaksi hari ini
+      const { data: txHariIni } = await supabase
+        .from('transaksi')
+        .select('total')
+        .gte('tanggal', startOfDay)
+        .lte('tanggal', endOfDay)
+
+      if (txHariIni) {
+        setJumlahTransaksi(txHariIni.length)
+        setOmzetHariIni(txHariIni.reduce((acc, tx) => acc + (tx.total || 0), 0))
+      }
+
+      // Total piutang belum lunas
+      const { data: piutangData } = await supabase
+        .from('piutang')
+        .select('sisa')
+        .eq('status', 'belum lunas')
+
+      if (piutangData) {
+        setTotalPiutang(piutangData.reduce((acc, p) => acc + (p.sisa || 0), 0))
+      }
+
+      // Jumlah pelanggan
+      const { count: pelangganCount } = await supabase
+        .from('pelanggan')
+        .select('*', { count: 'exact', head: true })
+
+      setJumlahPelanggan(pelangganCount || 0)
+
+      // 5 transaksi terbaru
+      const { data: recent } = await supabase
+        .from('transaksi')
+        .select('*')
+        .order('tanggal', { ascending: false })
+        .limit(5)
+
+      if (recent) setRecentTransaksi(recent as Transaksi[])
+
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setIsLoading(false)
     }
+  }
 
-    setLoading(true)
-    const supabase = createClient()
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: username,
-      password,
-    })
-    
-    if (signInError) {
-      setLoading(false)
-      setError("Username atau password salah")
-      return
-    }
-
-    // Explicitly refresh so that layout can pick up new session if needed
-    // The middleware will allow access to /dashboard now
-    router.refresh()
-    router.push("/dashboard")
+  const paymentColor = (jenis: string) => {
+    if (jenis === 'Tunai') return 'bg-green-500/10 text-green-400 border-green-500/20'
+    if (jenis === 'Transfer') return 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+    if (jenis === 'Piutang') return 'bg-red-500/10 text-red-400 border-red-500/20'
+    return 'bg-gray-500/10 text-gray-400 border-gray-500/20'
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-[#0d1117] relative overflow-hidden">
-      {/* Ambient background glows */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute -top-40 -left-40 w-96 h-96 bg-green-600/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-green-500/8 rounded-full blur-3xl" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-green-900/5 rounded-full blur-3xl" />
-      </div>
-
-      {/* Grid overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.03]"
-        style={{
-          backgroundImage:
-            "linear-gradient(#22c55e 1px, transparent 1px), linear-gradient(90deg, #22c55e 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
-        }}
-      />
-
-      <div className="relative z-10 w-full max-w-md px-4">
-        {/* Logo / Brand */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-green-500/10 border border-green-500/20 mb-4 shadow-lg shadow-green-500/5">
-            {/* Chicken icon SVG */}
-            <svg
-              className="w-9 h-9 text-green-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 2C8.5 2 6 4 6 7c0 1.5.5 2.8 1.4 3.8L5 14h3l-1 4h8l-1-4h3l-2.4-3.2C15.5 9.8 16 8.5 16 7c0-3-2.5-5-4-5z" />
-              <path d="M9 7c0 0 .5-1 1.5-1" />
-              <circle cx="10" cy="5.5" r=".5" fill="currentColor" stroke="none" />
-              <path d="M6 14c-1.5 0-2.5 1-2.5 2.5S4.5 19 6 19" />
-              <path d="M18 14c1.5 0 2.5 1 2.5 2.5S19.5 19 18 19" />
-            </svg>
-          </div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">
-            Berkat Jaya
-          </h1>
-          <p className="text-green-400/80 text-sm mt-1 font-medium tracking-wider uppercase">
-            Sistem Manajemen Distribusi Ayam
+    <>
+      <header className="sticky top-0 z-10 flex items-center justify-between px-8 py-5 bg-[#0d1117]/80 backdrop-blur border-b border-white/[0.05]">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Dashboard</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {new Date().toLocaleDateString("id-ID", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
           </p>
         </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fetchDashboardData}
+            className="text-sm text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 px-4 py-2 rounded-xl transition-colors"
+          >
+            🔄 Refresh
+          </button>
+          <div className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 px-4 py-2 rounded-xl">
+            <div className="w-2.5 h-2.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-sm text-green-400 font-semibold">Sistem Aktif</span>
+          </div>
+        </div>
+      </header>
 
-        {/* Card */}
-        <Card className="bg-[#161b22] border border-white/[0.08] shadow-2xl shadow-black/40">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-white text-xl">Masuk ke Sistem</CardTitle>
-            <CardDescription className="text-gray-400">
-              Masukkan kredensial Anda untuk mengakses dashboard
-            </CardDescription>
-          </CardHeader>
+      <main className="p-8 space-y-8">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Selamat datang, Christopher 👋</h1>
+          <p className="text-gray-400 text-base mt-1.5">Berikut ringkasan operasional Berkat Jaya hari ini.</p>
+        </div>
 
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-5">
-              {/* Error alert */}
-              {error && (
-                <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2.5 text-sm text-red-400">
-                  <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3m0 3h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                  </svg>
-                  {error}
-                </div>
-              )}
+        {/* KPI CARDS */}
+        {isLoading ? (
+          <div className="grid grid-cols-4 gap-5">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 animate-pulse h-36" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 gap-5">
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 hover:border-green-500/20 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <span className="text-3xl">💰</span>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-green-500/10 text-green-400">Hari ini</span>
+              </div>
+              <p className="text-2xl font-bold text-white">{formatRp(omzetHariIni)}</p>
+              <p className="text-sm text-gray-400 mt-2">Total Omzet Hari Ini</p>
+            </div>
 
-              {/* Username */}
-              <div className="space-y-2">
-                <Label htmlFor="username" className="text-gray-300 text-sm font-medium">
-                  Username
-                </Label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                    <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 hover:border-blue-500/20 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <span className="text-3xl">🧾</span>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400">Hari ini</span>
+              </div>
+              <p className="text-2xl font-bold text-white">{jumlahTransaksi} <span className="text-base text-gray-500 font-normal">transaksi</span></p>
+              <p className="text-sm text-gray-400 mt-2">Jumlah Transaksi</p>
+            </div>
+
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 hover:border-red-500/20 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <span className="text-3xl">📝</span>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-red-500/10 text-red-400">Belum lunas</span>
+              </div>
+              <p className="text-2xl font-bold text-red-400">{formatRp(totalPiutang)}</p>
+              <p className="text-sm text-gray-400 mt-2">Total Piutang</p>
+            </div>
+
+            <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl p-6 hover:border-purple-500/20 transition-colors">
+              <div className="flex items-start justify-between mb-4">
+                <span className="text-3xl">👥</span>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-500/10 text-purple-400">Total</span>
+              </div>
+              <p className="text-2xl font-bold text-white">{jumlahPelanggan} <span className="text-base text-gray-500 font-normal">orang</span></p>
+              <p className="text-sm text-gray-400 mt-2">Jumlah Pelanggan</p>
+            </div>
+          </div>
+        )}
+
+        {/* TRANSAKSI TERBARU */}
+        <div className="bg-[#161b22] border border-white/[0.06] rounded-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-7 py-5 border-b border-white/[0.06]">
+            <h3 className="font-bold text-white text-lg">Transaksi Terbaru</h3>
+            <a href="/dashboard/transaksi" className="text-sm text-green-400 hover:text-green-300 transition-colors font-medium">
+              Lihat semua →
+            </a>
+          </div>
+
+          {isLoading ? (
+            <div className="p-8 text-center text-gray-500">Memuat data...</div>
+          ) : recentTransaksi.length === 0 ? (
+            <div className="p-12 text-center text-gray-500">
+              <span className="text-4xl block mb-3 opacity-40">📭</span>
+              Belum ada transaksi
+            </div>
+          ) : (
+            <div className="divide-y divide-white/[0.04]">
+              {recentTransaksi.map((tx) => (
+                <div key={tx.id} className="flex items-center gap-5 px-7 py-4 hover:bg-white/[0.02] transition-colors">
+                  <div className="w-36 text-xs text-gray-500 font-mono">{tx.no_nota}</div>
+                  <div className="flex-1">
+                    <p className="text-base text-white font-semibold">{tx.nama_pembeli}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{formatDate(tx.tanggal)}</p>
                   </div>
-                  <Input
-                    id="username"
-                    placeholder="Masukkan username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="pl-9 bg-[#0d1117] border-white/10 text-white placeholder:text-gray-600 focus-visible:ring-green-500/50 focus-visible:border-green-500/50 h-11"
-                    autoComplete="username"
-                  />
-                </div>
-              </div>
-
-              {/* Password */}
-              <div className="space-y-2">
-                <Label htmlFor="password" className="text-gray-300 text-sm font-medium">
-                  Password
-                </Label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                    <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                  </div>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Masukkan password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="pl-9 bg-[#0d1117] border-white/10 text-white placeholder:text-gray-600 focus-visible:ring-green-500/50 focus-visible:border-green-500/50 h-11"
-                    autoComplete="current-password"
-                  />
-                </div>
-              </div>
-
-              {/* Lupa password */}
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  className="text-xs text-green-400/70 hover:text-green-400 transition-colors"
-                >
-                  Lupa password?
-                </button>
-              </div>
-
-              {/* Submit */}
-              <Button
-                id="login-button"
-                type="submit"
-                disabled={loading}
-                className="w-full h-11 bg-green-600 hover:bg-green-500 text-white font-semibold text-sm transition-all duration-200 shadow-lg shadow-green-900/30 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                    Memproses...
+                  <span className={`text-xs px-3 py-1.5 rounded-full font-medium border ${paymentColor(tx.jenis_pembayaran)}`}>
+                    {tx.jenis_pembayaran}
                   </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    Masuk
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                  </span>
-                )}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* Footer */}
-        <p className="text-center text-gray-600 text-xs mt-6">
-          &copy; {new Date().getFullYear()} Berkat Jaya &mdash; Semua hak dilindungi
-        </p>
-      </div>
-    </main>
+                  <div className="text-base font-semibold text-white w-32 text-right">{formatRp(tx.total)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </>
   )
 }
